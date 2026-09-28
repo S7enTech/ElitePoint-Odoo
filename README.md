@@ -28,9 +28,10 @@ environment this was built in. Before submitting to the App Store:
    test-connection, POS customer lookup, a points-only sale, a sale with a
    partial redemption, and a forced sync failure (kill network mid-sale) to
    confirm the retry cron recovers it.
-3. Replace the placeholder-free `static/description/index.html` images
-   (`icon.png`, `banner.png` — not yet created, see below) with real
-   ElitePoints branding.
+3. `icon.png` and `banner.png` are exported straight from the ElitePoints
+   Figma design system (Logo frame, `12:112`) — the gold app mark and the
+   dark wordmark lockup. Swap them only if brand wants different crops;
+   they don't need to be regenerated from scratch.
 4. Create an Odoo Apps publisher account at odoo.com/apps and submit
    through their review flow.
 
