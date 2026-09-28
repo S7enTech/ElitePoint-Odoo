@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <t t-name="elitepoints_loyalty.ControlButtons" t-inherit="point_of_sale.ControlButtons" t-inherit-mode="extension">
+        <xpath expr="//div[hasclass('control-buttons')]" position="inside">
+            <button t-if="showElitePointsButton"
+                    class="control-button btn btn-light rounded-0 fw-bolder elitepoints-control-button"
+                    t-on-click="clickElitePoints">
+                <i class="fa fa-star me-1" role="img" aria-label="ElitePoints" title="ElitePoints"/>
+                ElitePoints
+            </button>
+        </xpath>
+    </t>
+
+</templates>

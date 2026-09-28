@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_pos_order_form_elitepoints" model="ir.ui.view">
+        <field name="name">pos.order.form.elitepoints</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_pos_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//notebook" position="inside">
+                <page string="ElitePoints" name="elitepoints">
+                    <group>
+                        <group>
+                            <field name="elitepoints_customer_ref"/>
+                            <field name="elitepoints_identifier"/>
+                            <field name="elitepoints_sync_status" widget="badge"
+                                   decoration-success="elitepoints_sync_status == 'synced'"
+                                   decoration-danger="elitepoints_sync_status == 'failed'"
+                                   decoration-muted="elitepoints_sync_status == 'not_applicable'"/>
+                        </group>
+                        <group>
+                            <field name="elitepoints_redeem_amount"/>
+                            <field name="elitepoints_points_earned"/>
+                            <field name="elitepoints_points_redeemed"/>
+                        </group>
+                    </group>
+                    <field name="elitepoints_sync_error" invisible="elitepoints_sync_status != 'failed'"/>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_pos_order_tree_elitepoints" model="ir.ui.view">
+        <field name="name">pos.order.tree.elitepoints</field>
+        <field name="model">pos.order</field>
+        <field name="inherit_id" ref="point_of_sale.view_pos_order_tree"/>
+        <field name="arch" type="xml">
+            <xpath expr="//list" position="inside">
+                <field name="elitepoints_sync_status" optional="hide" widget="badge"
+                       decoration-success="elitepoints_sync_status == 'synced'"
+                       decoration-danger="elitepoints_sync_status == 'failed'"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

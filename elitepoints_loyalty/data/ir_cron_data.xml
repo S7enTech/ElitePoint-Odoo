@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="ir_cron_elitepoints_retry_failed_syncs" model="ir.cron">
+        <field name="name">ElitePoints: retry failed POS order syncs</field>
+        <field name="model_id" ref="point_of_sale.model_pos_order"/>
+        <field name="state">code</field>
+        <field name="code">model._elitepoints_retry_failed_syncs()</field>
+        <field name="interval_number">15</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+</odoo>

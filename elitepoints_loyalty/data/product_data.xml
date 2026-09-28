@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Virtual product used to apply a redemption as a negative-priced
+         order line, e.g. "ElitePoints Redemption  -500.00". Kept tax-free
+         so the discount is a straight currency amount: the module can
+         always recover the pre-redemption total as
+         amount_total + elitepoints_redeem_amount. -->
+    <record id="product_elitepoints_redeem" model="product.product">
+        <field name="name">ElitePoints Redemption</field>
+        <field name="type">service</field>
+        <field name="list_price">0.0</field>
+        <field name="available_in_pos">True</field>
+        <field name="taxes_id" eval="[(5, 0, 0)]"/>
+        <field name="sale_ok">False</field>
+        <field name="purchase_ok">False</field>
+    </record>
+</odoo>
