@@ -1,0 +1,42 @@
+## Local Odoo 18 instance for testing elitepoints_loyalty.
+## Not used for anything else — this is a throwaway dev database.
+##
+## Usage (from the repo root):
+##   docker compose -f dev/docker-compose.yml up
+##
+## Then open http://localhost:8069, create a database (any name/email/
+## password — this is local only), and go to Apps > Update Apps List >
+## search "ElitePoints Loyalty" > Install. You'll need Point of Sale
+## installed first (Apps > search "Point of Sale" > Install) since this
+## module depends on it.
+##
+## Stop with Ctrl+C, or `docker compose -f dev/docker-compose.yml down`.
+## Add `-v` to `down` to wipe the database and start fresh.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo-db-data:/var/lib/postgresql/data
+
+  odoo:
+    image: odoo:18
+    depends_on:
+      - db
+    ports:
+      - "8069:8069"
+    environment:
+      HOST: db
+      USER: odoo
+      PASSWORD: odoo
+    volumes:
+      - odoo-web-data:/var/lib/odoo
+      - ../elitepoints_loyalty:/mnt/extra-addons/elitepoints_loyalty
+
+volumes:
+  odoo-db-data:
+  odoo-web-data:

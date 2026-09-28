@@ -21,19 +21,36 @@ settings, `pos.order` create/write hooks, `_load_pos_data_fields`, the
 against a live Odoo 18 instance** — there was none available in the
 environment this was built in. Before submitting to the App Store:
 
-1. Spin up an Odoo 18 dev instance (Odoo.sh free trial, or
-   `docker run odoo:18`) and install this module from a local addons path.
-2. Configure a test store's API key/secret against
-   `elitepoint-backend-staging.up.railway.app` and walk through: settings
+1. **Test locally with Docker** (see below) and walk through: settings
    test-connection, POS customer lookup, a points-only sale, a sale with a
    partial redemption, and a forced sync failure (kill network mid-sale) to
-   confirm the retry cron recovers it.
-3. `icon.png` and `banner.png` are exported straight from the ElitePoints
-   Figma design system (Logo frame, `12:112`) — the gold app mark and the
-   dark wordmark lockup. Swap them only if brand wants different crops;
-   they don't need to be regenerated from scratch.
-4. Create an Odoo Apps publisher account at odoo.com/apps and submit
-   through their review flow.
+   confirm the retry cron recovers it. Point the store credentials at
+   `elitepoint-backend-staging.up.railway.app` so nothing touches
+   production data.
+2. ~~Create an Odoo Apps publisher account~~ — done.
+3. Submit through the Odoo Apps review flow, category **Point of Sale**
+   (there's no "Loyalty" category — Odoo categorizes by which app a module
+   extends, and comparable connector/integration apps all live under Point
+   of Sale, matching the `category` already set in the manifest).
+
+### Testing locally with Docker
+
+`odoo.com/trial` (Odoo Online) doesn't let you pick a version — it always
+provisions whatever's current. To test against a pinned Odoo 18, use the
+compose file in [`dev/docker-compose.yml`](dev/docker-compose.yml), which
+mounts `elitepoints_loyalty/` straight into the container as a local addon
+(needs [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+installed first):
+
+```bash
+docker compose -f dev/docker-compose.yml up
+```
+
+Then open <http://localhost:8069>, create a database (any name/email/
+password — local only), install **Point of Sale** from Apps (this module
+depends on it), then **Apps > Update Apps List** and install **ElitePoints
+Loyalty**. `docker compose -f dev/docker-compose.yml down -v` wipes it
+clean to start over.
 
 ## What's deliberately out of scope here
 
