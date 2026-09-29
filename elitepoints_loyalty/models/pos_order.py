@@ -35,7 +35,7 @@ class PosOrder(models.Model):
         "customer for this order.",
         copy=False,
     )
-    elitepoints_redeem_amount = fields.Monetary(
+    elitepoints_redeem_amount = fields.Float(
         string="ElitePoints Redeemed (Currency)",
         default=0.0,
         copy=False,
