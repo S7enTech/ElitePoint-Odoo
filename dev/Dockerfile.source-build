@@ -1,0 +1,42 @@
+# Diagnostic image: builds Odoo 18 straight from its official GitHub source
+# instead of pulling the prebuilt docker.io/library/odoo:18 image.
+#
+# Why this exists: a POS-core crash (taxTotals, in point_of_sale core JS)
+# reproduced identically across every configuration variable tried against
+# the prebuilt image (module installed/uninstalled, two build dates, demo
+# data on/off, Nigeria vs US company, sandboxed vs real browser) — see the
+# main README's isolation table. The one thing not yet ruled out is the
+# prebuilt Docker Hub image itself. This Dockerfile is a from-source build
+# to test that specific variable. Not for production use.
+FROM python:3.11-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    git \
+    libevent-dev \
+    libffi-dev \
+    libjpeg-dev \
+    libldap2-dev \
+    libpq-dev \
+    libsasl2-dev \
+    libssl-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    zlib1g-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch 18.0 https://github.com/odoo/odoo.git /opt/odoo
+
+WORKDIR /opt/odoo
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY elitepoints_loyalty /opt/odoo/custom-addons/elitepoints_loyalty
+COPY dev/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && mkdir -p /var/lib/odoo
+
+EXPOSE 8069
+ENTRYPOINT ["/entrypoint.sh"]
