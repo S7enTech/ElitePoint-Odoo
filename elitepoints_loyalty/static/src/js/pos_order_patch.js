@@ -40,4 +40,30 @@ patch(PosOrder.prototype, {
             return { ...FALLBACK_TAX_TOTALS };
         }
     },
+
+    // Same root cause (this.payment_ids undefined), different call site:
+    // getCustomerDisplayData does `this.payment_ids.map(...)` directly.
+    // Fires repeatedly (every order change resends to the customer-facing
+    // display), so left unguarded it re-crashes continuously.
+    getCustomerDisplayData() {
+        try {
+            return super.getCustomerDisplayData();
+        } catch (error) {
+            console.error(
+                "[elitepoints_loyalty] PosOrder.getCustomerDisplayData threw; returning a " +
+                    "safe empty payload so the customer display doesn't hard-crash the POS " +
+                    "screen. Not caused by this module — see static/src/js/pos_order_patch.js.",
+                error
+            );
+            return {
+                lines: [],
+                finalized: this.finalized,
+                amount: "",
+                paymentLines: [],
+                change: false,
+                generalNote: this.general_note || "",
+                qrPaymentData: undefined,
+            };
+        }
+    },
 });
