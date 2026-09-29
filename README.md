@@ -15,18 +15,51 @@ assets.
 
 ## Status
 
-Built against the documented Odoo 18 API surface (config-parameter-backed
-settings, `pos.order` create/write hooks, `_load_pos_data_fields`, the
-`ControlButtons` OWL patch point, the `dialog` service). **Not yet run
-against a live Odoo 18 instance** — there was none available in the
-environment this was built in. Before submitting to the App Store:
+Tested end-to-end against a real Odoo 18 instance (a throwaway Railway
+deployment — see `railway.json`/`Dockerfile`, not for production use).
 
-1. **Test locally with Docker** (see below) and walk through: settings
-   test-connection, POS customer lookup, a points-only sale, a sale with a
-   partial redemption, and a forced sync failure (kill network mid-sale) to
-   confirm the retry cron recovers it. Point the store credentials at
-   `elitepoint-backend-staging.up.railway.app` so nothing touches
-   production data.
+**Verified working:**
+- Module installs cleanly (no Python errors, 191 queries, ~0.4s).
+- Settings page renders correctly and round-trips through `ir.config_parameter`.
+- **Test Connection** makes a real HTTP call to
+  `elitepoint-backend-staging.up.railway.app` and correctly surfaces the
+  backend's actual error response (`ElitePoints error: Invalid credentials`)
+  — proves the client, auth flow, and error handling all work against the
+  real backend contract.
+
+**Blocked, not by this module:** opening a POS register on that same test
+instance hits a pre-existing crash in stock Odoo 18 core
+(`point_of_sale/static/src/app/models/pos_order.js` — `taxTotals`, called
+from `ProductScreen`'s header-total render and from
+`Chrome.sendOrderToCustomerDisplay`). This was isolated rigorously, not
+assumed:
+- Reproduces identically with `elitepoints_loyalty` fully uninstalled.
+- Reproduces identically with `pos_online_payment` (a stock POS dependency,
+  unrelated to this module) also uninstalled.
+- Unminified stack traces (`?debug=assets`) show every frame inside
+  `point_of_sale` core or `owl.js` — never a file from this module.
+- Disabling Customer Display (`pos_config.customer_display_type = 'none'`)
+  removes the `sendOrderToCustomerDisplay` trigger but the `ProductScreen`
+  render path still crashes the same way.
+
+So the actual control button / dialog code (`static/src/js/control_buttons.js`,
+`elitepoints_dialog.js`) has **not been visually confirmed in a browser** —
+the crash happens before `ControlButtons` renders. Whoever picks this up
+next should reproduce on a real desktop Chrome outside a sandboxed/headless
+environment first (this was hit in an automated browser pane whose Web
+Workers may be restricted — `bus/websocket_worker_bundle` was failing and
+retrying continuously in the same session, which is a plausible contributing
+factor). If the crash doesn't reproduce there, the button code was probably
+fine all along and just needs a normal click-through. If it does reproduce
+on a real browser, it's an Odoo 18 core / `point_of_sale` bug worth checking
+against Odoo's own tracker before assuming it's fixable here.
+
+Before submitting to the App Store:
+
+1. Get past the above on a real browser and walk through: POS customer
+   lookup, a points-only sale, a sale with a partial redemption, and a
+   forced sync failure (kill network mid-sale) to confirm the retry cron
+   recovers it.
 2. ~~Create an Odoo Apps publisher account~~ — done.
 3. Submit through the Odoo Apps review flow, category **Point of Sale**
    (there's no "Loyalty" category — Odoo categorizes by which app a module
