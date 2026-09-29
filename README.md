@@ -28,31 +28,38 @@ deployment — see `railway.json`/`Dockerfile`, not for production use).
   real backend contract.
 
 **Blocked, not by this module:** opening a POS register on that same test
-instance hits a pre-existing crash in stock Odoo 18 core
+instance hits a crash in stock Odoo 18 core
 (`point_of_sale/static/src/app/models/pos_order.js` — `taxTotals`, called
 from `ProductScreen`'s header-total render and from
-`Chrome.sendOrderToCustomerDisplay`). This was isolated rigorously, not
-assumed:
-- Reproduces identically with `elitepoints_loyalty` fully uninstalled.
-- Reproduces identically with `pos_online_payment` (a stock POS dependency,
-  unrelated to this module) also uninstalled.
-- Unminified stack traces (`?debug=assets`) show every frame inside
-  `point_of_sale` core or `owl.js` — never a file from this module.
-- Disabling Customer Display (`pos_config.customer_display_type = 'none'`)
-  removes the `sendOrderToCustomerDisplay` trigger but the `ProductScreen`
-  render path still crashes the same way.
+`Chrome.sendOrderToCustomerDisplay`). This was isolated exhaustively, not
+assumed — the identical crash (same function, same call chain) reproduces
+across every one of these independent variables:
+
+| Variable | Values tried | Result |
+|---|---|---|
+| `elitepoints_loyalty` installed | yes / fully uninstalled | crashes either way |
+| `pos_online_payment` installed | yes / fully uninstalled | crashes either way |
+| Odoo build | `18.0-20260926` (nightly) / `18.0-20260803` (~7wk older) | crashes on both |
+| Demo data | off / on | crashes either way |
+| Company country/currency | Nigeria (NGN) / United States (USD) | crashes either way |
+| Browser | this sandboxed automated pane / a real desktop Chrome (confirmed by the user) | crashes on both |
+| Customer Display setting | on / `none` | crashes either way (via a different call path — `ProductScreen`'s own render, not just `sendOrderToCustomerDisplay`) |
+
+Unminified stack traces (`?debug=assets`) show every frame inside
+`point_of_sale` core or `owl.js` on every single one of these runs — never
+a file from this module. Given the crash is entirely insensitive to
+company configuration, demo data, and installed modules, and reproduces on
+a real (non-sandboxed) browser too, this points at something about the
+`odoo:18` **Docker image / Railway deployment path itself** rather than a
+config edge case — worth testing against a non-Docker install (source, or
+a real Odoo Enterprise/Odoo.sh subscription) before filing it upstream.
 
 So the actual control button / dialog code (`static/src/js/control_buttons.js`,
 `elitepoints_dialog.js`) has **not been visually confirmed in a browser** —
-the crash happens before `ControlButtons` renders. Whoever picks this up
-next should reproduce on a real desktop Chrome outside a sandboxed/headless
-environment first (this was hit in an automated browser pane whose Web
-Workers may be restricted — `bus/websocket_worker_bundle` was failing and
-retrying continuously in the same session, which is a plausible contributing
-factor). If the crash doesn't reproduce there, the button code was probably
-fine all along and just needs a normal click-through. If it does reproduce
-on a real browser, it's an Odoo 18 core / `point_of_sale` bug worth checking
-against Odoo's own tracker before assuming it's fixable here.
+the crash happens before `ControlButtons` ever renders, on totally vanilla
+Odoo with nothing of this module installed. There is no remaining reason to
+suspect the module code itself; the blocker is entirely in getting a POS
+register to open at all in this environment.
 
 Before submitting to the App Store:
 
