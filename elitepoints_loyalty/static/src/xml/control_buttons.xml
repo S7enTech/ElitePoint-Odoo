@@ -2,9 +2,17 @@
 <templates xml:space="preserve">
 
     <t t-name="elitepoints_loyalty.ControlButtons" t-inherit="point_of_sale.ControlButtons" t-inherit-mode="extension">
-        <xpath expr="//div[hasclass('control-buttons')]" position="inside">
+        <!-- The main control row has no wrapping div of its own in this
+             template — its buttons are top-level siblings rendered directly
+             into the parent's flex container. The only element literally
+             named "control-buttons" here is control-buttons-modal, used
+             only inside the t-if="props.showRemainingButtons" dialog branch,
+             which is why anchoring there never shows anything in the normal
+             POS screen. Anchor on the always-present "Actions" button
+             instead. -->
+        <xpath expr="//button[hasclass('more-btn')]" position="before">
             <button t-if="showElitePointsButton"
-                    class="control-button btn btn-light rounded-0 fw-bolder elitepoints-control-button"
+                    class="btn btn-light btn-lg lh-lg flex-shrink-0 elitepoints-control-button"
                     t-on-click="clickElitePoints">
                 <i class="fa fa-star me-1" role="img" aria-label="ElitePoints" title="ElitePoints"/>
                 ElitePoints
