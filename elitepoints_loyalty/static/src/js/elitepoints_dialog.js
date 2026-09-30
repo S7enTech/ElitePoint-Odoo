@@ -25,6 +25,7 @@ export class ElitePointsDialog extends Component {
     static components = { Dialog };
     static props = {
         close: Function,
+        onConfirm: Function,
         getPayload: Function,
     };
 
@@ -87,15 +88,21 @@ export class ElitePointsDialog extends Component {
             0,
             Math.min(Number(this.state.redeemAmount) || 0, this.maxRedeemable)
         );
-        this.props.close({
+        // props.close is the dialog service's own dismiss function — it's
+        // always injected as `{...props, close}` by dialog_service.js,
+        // silently overwriting anything passed under that name, and it
+        // takes no arguments. Getting data back out requires a
+        // separately-named callback instead.
+        this.props.onConfirm({
             customerRef: String(this.state.customer.customerId),
             identifier: this.state.identifier.trim(),
             pointsBalance: this.state.customer.pointsBalance,
             redeemAmount,
         });
+        this.props.close();
     }
 
     cancel() {
-        this.props.close(null);
+        this.props.close();
     }
 }

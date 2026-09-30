@@ -47,17 +47,47 @@ patch(ControlButtons.prototype, {
 
         this.dialog.add(ElitePointsDialog, {
             getPayload: () => ({ orderTotal }),
-            close: (result) => this._onElitePointsDialogClosed(order, result),
+            // NOT `close` — the dialog service always injects its own
+            // `close` (dialog_service.js: `subProps: {...props, close}`),
+            // silently overwriting anything passed under that name. A
+            // confirm callback needs a name the service doesn't reserve.
+            onConfirm: (result) => this._onElitePointsDialogClosed(order, result),
         });
     },
 
-    _onElitePointsDialogClosed(order, result) {
+    async _onElitePointsDialogClosed(order, result) {
         if (!result) {
             return;
         }
 
-        order.elitepoints_customer_ref = result.customerRef;
-        order.elitepoints_identifier = result.identifier;
+        // pos.order._load_pos_data_fields can't safely be extended in
+        // this Odoo build — see models/pos_order.py — so these values
+        // can't just be assigned onto the reactive order object and left
+        // to ride along with the normal order sync. Instead, stage them
+        // server-side now, keyed by this order's UUID (a stock pos.order
+        // field that syncs normally); PosOrder.create()/write() picks the
+        // row back up once the order itself reaches the backend. Awaited
+        // and surfaced on failure — losing this silently would mean the
+        // sale completes but never earns/redeems any points, with nothing
+        // telling the cashier why.
+        try {
+            await this.orm.call("pos.order", "elitepoints_stage_order_sync", [
+                order.uuid,
+                result.customerRef,
+                result.identifier,
+                result.redeemAmount || 0,
+            ]);
+        } catch (error) {
+            this.notification.add(
+                _t(
+                    "Could not link this sale to the ElitePoints customer. " +
+                        "The sale will still go through, but it won't earn " +
+                        "or redeem points — try the lookup again."
+                ),
+                { type: "danger" }
+            );
+            return;
+        }
 
         // Remove a previous redemption line from an earlier lookup on the
         // same order before adding the new one, so re-opening the dialog
@@ -68,8 +98,6 @@ patch(ControlButtons.prototype, {
         if (existingLine) {
             order.removeOrderline(existingLine);
         }
-
-        order.elitepoints_redeem_amount = result.redeemAmount || 0;
 
         if (result.redeemAmount > 0) {
             if (!this.elitepoints.redeemProductId) {
@@ -86,11 +114,15 @@ patch(ControlButtons.prototype, {
             const rewardProduct = this.pos.models["product.product"].get(
                 this.elitepoints.redeemProductId
             );
-            const line = order.add_product(rewardProduct, {
-                price: -result.redeemAmount,
-                quantity: 1,
-                merge: false,
-            });
+            // order.add_product doesn't exist on this Odoo build (verified
+            // live — it's undefined on PosOrder); the current API is
+            // PosStore.addLineToCurrentOrder. configure=false skips any
+            // attribute/configurator popup for this synthetic line.
+            const line = await this.pos.addLineToCurrentOrder(
+                { product_id: rewardProduct, price_unit: -result.redeemAmount, qty: 1 },
+                {},
+                false
+            );
             if (line) {
                 line.elitepoints_redeem_line = true;
             }

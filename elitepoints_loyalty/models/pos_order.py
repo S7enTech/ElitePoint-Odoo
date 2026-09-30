@@ -60,27 +60,45 @@ class PosOrder(models.Model):
         default=0, readonly=True, copy=False
     )
 
-    @api.model
-    def _load_pos_data_fields(self, config_id):
-        # Odoo's POS frontend only reads/writes fields that are on this
-        # allowlist — a field left off it is invisible to the frontend even
-        # though it exists on the model, so setting it in JS silently never
-        # reaches the server. This is the one line that makes the fields
-        # above actually round-trip.
-        fields_list = super()._load_pos_data_fields(config_id)
-        fields_list += [
-            "elitepoints_customer_ref",
-            "elitepoints_identifier",
-            "elitepoints_redeem_amount",
-            "elitepoints_points_earned",
-            "elitepoints_points_redeemed",
-            "elitepoints_sync_status",
-        ]
-        return fields_list
+    # Deliberately NOT overriding _load_pos_data_fields here. Doing so —
+    # even for a single ordinary field — silently breaks the POS frontend's
+    # ability to add order lines at all in this Odoo build: no crash, no
+    # error, a product tap just does nothing. Confirmed not specific to
+    # this module, this field, or this nightly (reproduces across every
+    # 18.0 build tried, Jan–Sep 2026); filed upstream as
+    # odoo/odoo#291214. See the README for the full isolation writeup.
+    #
+    # Instead, elitepoints_customer_ref/identifier/redeem_amount travel
+    # from frontend to backend via elitepoints_stage_order_sync (an RPC
+    # call, same pattern as elitepoints_lookup_customer below) staged in
+    # elitepoints.pending.sync, keyed by the order's UUID — a stock
+    # pos.order field that syncs normally since it's core's own, not
+    # something this module adds. _elitepoints_apply_pending_sync picks the
+    # row back up the moment the order itself reaches the backend.
+
+    def _elitepoints_apply_pending_sync(self):
+        pending_model = self.env["elitepoints.pending.sync"].sudo()
+        for order in self:
+            if order.elitepoints_customer_ref or not order.uuid:
+                continue
+            pending = pending_model.search(
+                [("order_uuid", "=", order.uuid)], limit=1
+            )
+            if not pending:
+                continue
+            order.write(
+                {
+                    "elitepoints_customer_ref": pending.customer_ref,
+                    "elitepoints_identifier": pending.identifier,
+                    "elitepoints_redeem_amount": pending.redeem_amount,
+                }
+            )
+            pending.unlink()
 
     @api.model_create_multi
     def create(self, vals_list):
         orders = super().create(vals_list)
+        orders._elitepoints_apply_pending_sync()
         for order in orders:
             if (
                 order.elitepoints_customer_ref
@@ -94,6 +112,7 @@ class PosOrder(models.Model):
     def write(self, vals):
         result = super().write(vals)
         if vals.get("state") in SYNCABLE_STATES:
+            self._elitepoints_apply_pending_sync()
             for order in self:
                 if (
                     order.elitepoints_customer_ref
@@ -210,6 +229,26 @@ class PosOrder(models.Model):
     # ------------------------------------------------------------------
     # RPC surface for the POS frontend
     # ------------------------------------------------------------------
+
+    @api.model
+    def elitepoints_stage_order_sync(
+        self, order_uuid, customer_ref, identifier, redeem_amount
+    ):
+        """Stages customer/redemption data for an order that hasn't
+        reached the backend yet, keyed by the order's client-generated
+        UUID. See the note above _elitepoints_apply_pending_sync for why
+        this exists instead of a plain synced field.
+        """
+        pending_model = self.env["elitepoints.pending.sync"].sudo()
+        pending_model.search([("order_uuid", "=", order_uuid)]).unlink()
+        pending_model.create(
+            {
+                "order_uuid": order_uuid,
+                "customer_ref": customer_ref,
+                "identifier": identifier,
+                "redeem_amount": redeem_amount or 0.0,
+            }
+        )
 
     @api.model
     def elitepoints_lookup_customer(

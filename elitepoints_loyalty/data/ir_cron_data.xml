@@ -9,4 +9,14 @@
         <field name="interval_type">minutes</field>
         <field name="active">True</field>
     </record>
+
+    <record id="ir_cron_elitepoints_cleanup_pending_sync" model="ir.cron">
+        <field name="name">ElitePoints: clean up abandoned pending order syncs</field>
+        <field name="model_id" ref="model_elitepoints_pending_sync"/>
+        <field name="state">code</field>
+        <field name="code">model._cleanup_stale()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active">True</field>
+    </record>
 </odoo>

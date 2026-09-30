@@ -1,3 +1,4 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_elitepoints_client_pos_user,elitepoints.client.pos_user,model_elitepoints_client,point_of_sale.group_pos_user,1,1,1,0
 access_elitepoints_client_pos_manager,elitepoints.client.pos_manager,model_elitepoints_client,point_of_sale.group_pos_manager,1,1,1,0
+access_elitepoints_pending_sync_pos_manager,elitepoints.pending.sync.pos_manager,model_elitepoints_pending_sync,point_of_sale.group_pos_manager,1,1,1,1
