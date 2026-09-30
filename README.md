@@ -57,14 +57,56 @@ and is safe to delete once Odoo fixes it upstream. With it in place, the
 POS screen renders normally and this module's own UI works exactly as
 designed — confirmed live, not assumed.
 
+### A second, more severe core Odoo bug — currently blocking
+
+While running the real-credentials test below, hit a second core defect,
+worse than the first: extending `pos.order._load_pos_data_fields()` with
+**any** custom field — the standard, documented mechanism this module needs
+to get the ElitePoints customer reference from the POS frontend to the
+backend — silently breaks the ability to add products to an order at all.
+No crash, no console error; a product tap is just swallowed, cart stays at
+0 items forever.
+
+Isolated with the same rigor as the first bug: an A/B test on the same
+shop/session with only the module's install state changed (installed →
+broken, uninstalled → works), then bisected file-by-file down to
+`_load_pos_data_fields` specifically, then binary-searched the exposed
+field list down to a single, ordinary `Float` field still reproducing it.
+This means the module's sync feature — not just redemption, the basic
+points-earning flow too, since `elitepoints_customer_ref` is itself one of
+the exposed fields — cannot currently reach the backend on this Odoo build.
+
+Filed upstream as
+[odoo/odoo#291214](https://github.com/odoo/odoo/issues/291214), with the
+minimal repro. No existing report or fix found for this exact interaction
+despite a fairly thorough search; possibly related to
+[#196157](https://github.com/odoo/odoo/issues/196157) (a different but
+adjacent `taxTotals`/`payment_ids` crash, also open, also unrelated to any
+custom module) and [#213425](https://github.com/odoo/odoo/issues/213425)
+("endless loading of the cash register" with loyalty installed — different
+proximate cause, but establishes 18.0's POS + custom-`pos.order`-extension
+interaction has had more than one nightly-specific reactivity regression).
+
+Options going forward, not yet decided:
+1. Wait for/track the upstream fix.
+2. Test against a different 18.0 build (different nightly, or the last
+   stable point release) to see if it's specific to the pinned
+   `18.0-20260803`.
+3. Rework the sync fields to travel over RPC instead of
+   `_load_pos_data_fields` — the same pattern the customer lookup/balance
+   calls already use successfully (`elitepoints_lookup_customer`,
+   `elitepoints_get_balance`). More work, but sidesteps the broken
+   mechanism regardless of whether it's ever fixed upstream.
+
 Before submitting to the App Store:
 
 1. ~~Get past the core crash and confirm the POS button/dialog~~ — done.
 2. ~~Create an Odoo Apps publisher account~~ — done.
-3. Walk through a points-only sale, a sale with a partial redemption, and a
-   forced sync failure (kill network mid-sale) to confirm the retry cron
-   recovers it — these need a real (non-fake) store API key/secret against
-   staging, which wasn't available during this build.
+3. **Blocked** — walk through a points-only sale, a sale with a partial
+   redemption, and a forced sync failure (kill network mid-sale) to confirm
+   the retry cron recovers it. Real (non-fake) store credentials against
+   staging are in place, but the sync itself cannot currently complete — see
+   the bug above.
 4. Submit through the Odoo Apps review flow, category **Point of Sale**
    (there's no "Loyalty" category — Odoo categorizes by which app a module
    extends, and comparable connector/integration apps all live under Point
