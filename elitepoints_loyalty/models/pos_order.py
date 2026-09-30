@@ -127,8 +127,21 @@ class PosOrder(models.Model):
 
     def _elitepoints_build_items(self):
         self.ensure_one()
+        # Exclude the ElitePoints Redemption line itself: it's a synthetic
+        # negative-priced order line the frontend adds purely so the POS
+        # cart total reflects the discount (see control_buttons.js) — not
+        # a real purchased item. Sending it as an "item" fails backend
+        # validation ("unitPrice must not be less than 0"), and would be
+        # wrong even if it passed: the backend's own redeem_points call
+        # already derives the discount from gross_amount/redeem_amount
+        # separately, so including it here would double-count it.
+        redeem_product = self.env.ref(
+            "elitepoints_loyalty.product_elitepoints_redeem", raise_if_not_found=False
+        )
         items = []
         for line in self.lines:
+            if redeem_product and line.product_id.id == redeem_product.id:
+                continue
             items.append(
                 {
                     "productId": str(line.product_id.id),

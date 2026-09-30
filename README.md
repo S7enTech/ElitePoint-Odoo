@@ -28,11 +28,16 @@ POS button and dialog. Confirmed live:
   dialog's "Look Up" makes a real RPC round trip through `pos.order` →
   `elitepoints.client` → the backend, correctly rendering the backend's
   actual rejection inline as an error banner.
-- **A full points-only sale, against real ElitePoints staging credentials,
-  start to finish** — add product, look up a real customer, pay, validate
-  — with the resulting order confirmed `synced` and a real point grant in
-  the database afterward. See "Confirmed working end-to-end" below for
-  detail, and the two sections before it for what it took to get there.
+- **Full points-only and partial-redemption sales, against real
+  ElitePoints staging credentials, start to finish** — add product, look
+  up a real customer, (optionally redeem part of their balance), pay,
+  validate — with the resulting orders confirmed `synced` and real
+  points earned/redeemed in the database afterward, including one real
+  sync failure caught and confirmed recovered by retry. See "Confirmed
+  working end-to-end" below for detail, and the sections before it for
+  what it took to get there — four bugs total, two in Odoo core and two
+  in this module's own code, none of them previously exercised until
+  this pass.
 
 ### A pre-existing Odoo 18 core bug, and how it's handled
 
@@ -145,27 +150,56 @@ reserve) and had `confirm()`/`cancel()` call the real `props.close()`
 the bug was found — an instrumented live prototype patch showing the
 callback firing — before removing the instrumentation.
 
+### A fourth bug — the redemption line was invalidating its own sync
+
+Confirmed with a real points balance: a $140 points-only sale earns
+points, so the same test customer had exactly 1.4 points on the books by
+the time a redemption was tried. Looking them up, applying a $1 partial
+redemption, paying, and validating all worked correctly on the frontend —
+cart total, receipt, everything reflected the discount exactly right. But
+the order's `elitepoints_sync_status` came back `failed`:
+
+```
+ElitePoints error: ['items.1.unitPrice must not be less than 0', 'items.1.totalPrice must not be less than 0']
+```
+
+`_elitepoints_build_items()` was including the synthetic "ElitePoints
+Redemption" line itself in the `items` array sent to `redeem_points` — a
+real purchased-item list should never contain a negative-priced entry for
+the discount mechanism itself, and the backend correctly rejects it. Fixed
+by excluding any line whose product is the redemption product from the
+built items list; the backend already derives the discount from
+`gross_amount`/`redeem_amount` separately, so the line was never needed
+there anyway.
+
+Retried the same failed order by hand afterward (the exact call the
+15-minute retry cron makes) and it went from `failed` → `synced`,
+`elitepoints_points_redeemed: 1`, no error — which is also, in effect, the
+"forced sync failure, confirm the retry cron recovers it" test: a real
+failure (not a contrived one) followed by a real successful retry.
+
 ### Confirmed working end-to-end against real ElitePoints staging credentials
 
-With all three fixes in place: added a product, looked up a real
-ElitePoints test customer by phone (a real RPC round trip returning their
-real balance), applied the lookup, paid, and validated. Checked the
-resulting `pos.order` directly in the database afterward —
-`elitepoints_customer_ref` and `elitepoints_identifier` correctly carried
-over from the staged RPC data, `elitepoints_sync_status` was `synced`
-(not `failed`), and `elitepoints_points_earned` was `1` — a real point
-grant from the real ElitePoints staging backend, not a mock.
+With all four fixes in place, both scenarios verified live against real
+ElitePoints staging credentials, database-checked afterward each time:
+
+- **Points-only sale**: add product, look up a real customer, pay,
+  validate. `elitepoints_sync_status: synced`, `elitepoints_points_earned:
+  1` — a real point grant, not a mock.
+- **Partial redemption**: look up a customer with a real balance, redeem
+  part of it, pay, validate. Cart/receipt/total all correctly reflected
+  the discount. First attempt caught the items bug above (a real, useful
+  failure); after the fix, `elitepoints_sync_status: synced`,
+  `elitepoints_points_redeemed: 1`, `elitepoints_redeem_amount` and
+  `elitepoints_customer_ref` both correctly carried over from the staged
+  RPC data.
 
 Before submitting to the App Store:
 
 1. ~~Get past the core crash and confirm the POS button/dialog~~ — done.
 2. ~~Create an Odoo Apps publisher account~~ — done.
-3. ~~Points-only sale~~ — done, confirmed live against real staging
-   credentials (see above). Still to walk through: a sale with a partial
-   redemption (needs a test customer with a real points balance — the
-   customer used above now has exactly 1 point from that first sale, not
-   enough for a meaningful redemption yet), and a forced sync failure
-   (kill network mid-sale) to confirm the retry cron recovers it.
+3. ~~Points-only sale, partial redemption, and a failed-sync retry~~ —
+   all done, confirmed live against real staging credentials (see above).
 4. Submit through the Odoo Apps review flow, category **Point of Sale**
    (there's no "Loyalty" category — Odoo categorizes by which app a module
    extends, and comparable connector/integration apps all live under Point

@@ -4,14 +4,26 @@
          order line, e.g. "ElitePoints Redemption  -500.00". Kept tax-free
          so the discount is a straight currency amount: the module can
          always recover the pre-redemption total as
-         amount_total + elitepoints_redeem_amount. -->
+         amount_total + elitepoints_redeem_amount.
+
+         sale_ok must be True even though this is never actually sold
+         through a Sales order: pos.config._get_available_product_domain()
+         hard-requires ('sale_ok', '=', True) for ANY product to load into
+         the POS frontend at all, regardless of available_in_pos. With it
+         False (the original, semantically-tempting value — this product
+         isn't really "sellable"), this.pos.models["product.product"].get()
+         always returns undefined client-side, so a redemption could never
+         actually apply — confirmed live via console introspection: the
+         product existed server-side (a real id came back from
+         elitepoints_get_redeem_product_id) but was silently absent from
+         the frontend's own product set. -->
     <record id="product_elitepoints_redeem" model="product.product">
         <field name="name">ElitePoints Redemption</field>
         <field name="type">service</field>
         <field name="list_price">0.0</field>
         <field name="available_in_pos">True</field>
         <field name="taxes_id" eval="[(5, 0, 0)]"/>
-        <field name="sale_ok">False</field>
+        <field name="sale_ok">True</field>
         <field name="purchase_ok">False</field>
     </record>
 </odoo>
