@@ -177,6 +177,7 @@ class PosOrder(models.Model):
                 continue
 
             order.elitepoints_sync_attempts += 1
+            pos_config = order.config_id
             external_transaction_id = order.pos_reference or f"pos-order-{order.id}"
             items = order._elitepoints_build_items()
             payment_method = order._elitepoints_payment_method_label()
@@ -185,6 +186,7 @@ class PosOrder(models.Model):
                 if order.elitepoints_redeem_amount > 0:
                     gross_amount = order.amount_total + order.elitepoints_redeem_amount
                     result = client.redeem_points(
+                        pos_config,
                         customer_ref=order.elitepoints_customer_ref,
                         amount=gross_amount,
                         redeem_amount=order.elitepoints_redeem_amount,
@@ -198,6 +200,7 @@ class PosOrder(models.Model):
                     )
                 else:
                     result = client.earn_points(
+                        pos_config,
                         customer_ref=order.elitepoints_customer_ref,
                         amount=order.amount_total,
                         description=f"POS Sale {order.pos_reference or order.name}",
@@ -265,23 +268,31 @@ class PosOrder(models.Model):
 
     @api.model
     def elitepoints_lookup_customer(
-        self, identifier, id_type, first_name=None, last_name=None
+        self, pos_config_id, identifier, id_type, first_name=None, last_name=None
     ):
+        pos_config = self.env["pos.config"].browse(pos_config_id)
         return self.env["elitepoints.client"].lookup_customer(
-            identifier, id_type, first_name=first_name, last_name=last_name
+            pos_config, identifier, id_type, first_name=first_name, last_name=last_name
         )
 
     @api.model
-    def elitepoints_get_balance(self, customer_ref):
-        return self.env["elitepoints.client"].get_customer_balance(customer_ref)
+    def elitepoints_get_balance(self, pos_config_id, customer_ref):
+        pos_config = self.env["pos.config"].browse(pos_config_id)
+        return self.env["elitepoints.client"].get_customer_balance(
+            pos_config, customer_ref
+        )
 
     @api.model
     def elitepoints_get_redeem_product_id(self):
+        # The redemption line's underlying product is shared across every
+        # shop — it's just a generic line item used to render the discount,
+        # not an ElitePoints-identity concept, so it isn't per pos.config.
         product = self.env.ref(
             "elitepoints_loyalty.product_elitepoints_redeem", raise_if_not_found=False
         )
         return product.id if product else False
 
     @api.model
-    def elitepoints_is_configured(self):
-        return self.env["elitepoints.client"].is_configured()
+    def elitepoints_is_configured(self, pos_config_id):
+        pos_config = self.env["pos.config"].browse(pos_config_id)
+        return self.env["elitepoints.client"].is_configured(pos_config)

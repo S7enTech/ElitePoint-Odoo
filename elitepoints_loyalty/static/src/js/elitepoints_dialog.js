@@ -56,7 +56,11 @@ export class ElitePointsDialog extends Component {
             const customer = await this.orm.call(
                 "pos.order",
                 "elitepoints_lookup_customer",
-                [this.state.identifier.trim(), this.state.lookupType]
+                [
+                    this.props.getPayload().posConfigId,
+                    this.state.identifier.trim(),
+                    this.state.lookupType,
+                ]
             );
             this.state.customer = customer;
             this.state.redeemAmount = 0;

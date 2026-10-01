@@ -21,7 +21,7 @@ patch(ControlButtons.prototype, {
                 this.elitepoints.configured = await this.orm.call(
                     "pos.order",
                     "elitepoints_is_configured",
-                    []
+                    [this.pos.config.id]
                 );
                 if (this.elitepoints.configured) {
                     this.elitepoints.redeemProductId = await this.orm.call(
@@ -46,7 +46,7 @@ patch(ControlButtons.prototype, {
         const orderTotal = order.get_total_with_tax();
 
         this.dialog.add(ElitePointsDialog, {
-            getPayload: () => ({ orderTotal }),
+            getPayload: () => ({ orderTotal, posConfigId: this.pos.config.id }),
             // NOT `close` — the dialog service always injects its own
             // `close` (dialog_service.js: `subProps: {...props, close}`),
             // silently overwriting anything passed under that name. A

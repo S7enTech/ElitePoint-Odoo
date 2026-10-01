@@ -37,7 +37,9 @@ POS button and dialog. Confirmed live:
   working end-to-end" below for detail, and the sections before it for
   what it took to get there — four bugs total, two in Odoo core and two
   in this module's own code, none of them previously exercised until
-  this pass.
+  this pass. (This describes the initial App Store submission; see
+  "v2: per-shop credentials for multi-store merchants" below for a real
+  architectural fix made after it went live.)
 
 ### A pre-existing Odoo 18 core bug, and how it's handled
 
@@ -205,6 +207,69 @@ Before submitting to the App Store:
    extends, and comparable connector/integration apps all live under Point
    of Sale, matching the `category` already set in the manifest).
 
+## v2 (18.0.2.0.0): per-shop credentials for multi-store merchants
+
+After the App Store listing went live, a real architectural gap surfaced:
+ElitePoints already models one API key/secret pair as one store's identity
+— that's how `/odoo/auth` has always worked. v1 of this module stored that
+single key/secret **company-wide** (one `ir.config_parameter`, set once on
+the shared Point of Sale Settings page). That's fine for a merchant with
+one location, but wrong for a merchant running several physical stores off
+one shared Odoo database — a completely normal Odoo setup, since one
+database sharing inventory/accounting across multiple `pos.config` "shops"
+is the standard multi-location pattern, not an edge case. Every shop in
+that database would have been forced to authenticate as the exact same
+ElitePoints store, merging all of their sales under one store ID server
+-side — reporting like "best store" would have nothing to rank, because
+ElitePoints would only ever see one undifferentiated store where there
+were actually several.
+
+**Fixed by moving credentials from company-wide Settings to each shop's
+own record.** `elitepoints_api_key`/`elitepoints_api_secret`/
+`elitepoints_base_url` now live on `pos.config` itself (Point of Sale >
+Configuration > Point of Sale > a shop > ElitePoints Loyalty), alongside a
+per-shop cached access token. Every register running under one shop
+naturally shares that shop's identity; a different shop in the same
+database gets its own. `elitepoints_client.py`'s entire public surface
+(`lookup_customer`, `get_customer_balance`, `earn_points`,
+`redeem_points`, `test_connection`) now takes the `pos.config` it's acting
+on, and the frontend passes `this.pos.config.id` through on every call
+that needs it. Confirmed this doesn't affect what a customer can do:
+ElitePoints balances are partner-wide, not store-scoped, so a customer can
+still earn at one shop and redeem at another — this change only fixes
+*attribution* of which store a sale happened at, not what the customer
+sees.
+
+The old company-wide Settings page and its fields are gone outright, not
+deprecated in place — keeping both would mean two sources of truth for
+the same thing. Since this was a real schema and UI relocation on a
+module that was already live, a migration
+(`migrations/18.0.2.0.0/post-migrate.py`) carries the one old shared
+credential forward onto *every* existing shop on upgrade, so nothing
+silently stops authenticating — every shop keeps working exactly as
+before (all sharing the one key they already had) until an admin gives
+any of them their own distinct key.
+
+**Verified against the real staging backend, not assumed:**
+
+- Upgraded a real multi-shop install (3 active shops sharing one
+  credential pre-upgrade) and confirmed the migration copied that
+  credential onto all three.
+- Proved shops are actually isolated, not just configured separately: set
+  one shop to the real credential, a second to a deliberately wrong one,
+  and a third to blank. `is_configured` correctly reported
+  true/true/false; `test_connection` and a real `lookup_customer` call
+  succeeded on the real-credential shop and failed cleanly on the wrong
+  one — critically, the wrong shop never succeeded by way of the correct
+  shop's cached token, which is the specific cross-store bug this
+  architecture could have silently introduced if a token were cached
+  once per database instead of once per shop.
+- Ran a complete real sale through the actual POS UI on the
+  real-credential shop end to end — ElitePoints button, customer lookup,
+  payment, validation — and confirmed the order synced
+  (`elitepoints_sync_status: synced`) with real points earned against the
+  real staging backend, with the correct shop recorded on the order.
+
 ### Testing locally with Docker
 
 `odoo.com/trial` (Odoo Online) doesn't let you pick a version — it always
@@ -232,8 +297,5 @@ clean to start over.
 - Sage-style backfill/idempotency edge cases — the backend's Odoo adapter
   now accepts `externalTransactionId` (see the paired backend change) so
   retries from the cron are safe, but this hasn't been load-tested.
-- Multi-store-per-Odoo-database support. Credentials are configured once,
-  company-wide, via Settings — matching the single API-key/secret-per-store
-  design of the backend's `/odoo/auth` endpoint. A merchant with multiple
-  ElitePoints stores needs multiple Odoo databases (or a v2 with
-  per-`pos.config` credentials).
+- ~~Multi-store-per-Odoo-database support~~ — resolved in v2 (see above):
+  each shop now has its own ElitePoints credentials.

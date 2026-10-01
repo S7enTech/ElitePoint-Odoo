@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="pos_config_view_form_elitepoints" model="ir.ui.view">
+        <field name="name">pos.config.view.form.elitepoints</field>
+        <field name="model">pos.config</field>
+        <field name="inherit_id" ref="point_of_sale.pos_config_view_form"/>
+        <field name="arch" type="xml">
+            <!-- Anchored on the IoT Box setting's own id rather than this
+                 shop's name/position, which is more likely to shift across
+                 Odoo versions. Lives inside the same
+                 invisible="context.get('pos_config_create_mode', False)"
+                 container as the other per-shop settings here, so — like
+                 them — it only shows once the shop already exists, not
+                 during the quick "+ New Shop" creation flow. -->
+            <xpath expr="//setting[@id='other_devices']" position="after">
+                <setting id="elitepoints_setting"
+                         string="ElitePoints Loyalty"
+                         help="Connect this specific shop to the ElitePoints loyalty network. Each shop needs its own API key — that's what tells ElitePoints which store a sale happened at, so a merchant with multiple shops in this database must give each one a different key.">
+                    <field name="elitepoints_api_key" placeholder="odok_live_..."/>
+                    <div class="content-group">
+                        <field name="elitepoints_api_secret" placeholder="odos_live_..." password="True"/>
+                    </div>
+                    <div class="content-group">
+                        <label for="elitepoints_base_url" string="API URL"/>
+                        <field name="elitepoints_base_url"/>
+                    </div>
+                    <div class="content-group">
+                        <button name="action_elitepoints_test_connection"
+                                type="object"
+                                string="Test Connection"
+                                class="btn-secondary"/>
+                    </div>
+                </setting>
+            </xpath>
+        </field>
+    </record>
+</odoo>

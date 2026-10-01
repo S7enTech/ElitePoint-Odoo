@@ -1,6 +1,6 @@
 {
     'name': 'ElitePoints Loyalty',
-    'version': '18.0.1.0.0',
+    'version': '18.0.2.0.0',
     'category': 'Point of Sale',
     'summary': 'Reward and redeem ElitePoints loyalty points from Odoo Point of Sale',
     'description': """
@@ -9,7 +9,10 @@ ElitePoints Loyalty
 
 Connects your Odoo Point of Sale to the ElitePoints loyalty network.
 
-* Configure your store's ElitePoints API key and secret in Settings.
+* Configure each shop's own ElitePoints API key and secret right on that
+  shop (Point of Sale > Configuration > Point of Sale > your shop) — a
+  merchant running several locations off one Odoo database gives each one
+  its own key, so sales are correctly attributed per store.
 * Look up a customer by phone, email, or loyalty barcode at the POS register.
 * Show the customer's live ElitePoints balance during checkout.
 * Redeem points against the current sale.
@@ -26,7 +29,7 @@ to sign up.
     'depends': ['point_of_sale'],
     'data': [
         'security/ir.model.access.csv',
-        'views/res_config_settings_views.xml',
+        'views/pos_config_views.xml',
         'views/pos_order_views.xml',
         'data/product_data.xml',
         'data/ir_cron_data.xml',
