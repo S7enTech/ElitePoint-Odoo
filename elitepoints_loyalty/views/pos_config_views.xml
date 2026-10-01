@@ -11,25 +11,23 @@
                  invisible="context.get('pos_config_create_mode', False)"
                  container as the other per-shop settings here, so — like
                  them — it only shows once the shop already exists, not
-                 during the quick "+ New Shop" creation flow. -->
+                 during the quick "+ New Shop" creation flow.
+
+                 This opens a separate record (elitepoints.pos.credential)
+                 instead of embedding the credential fields directly on
+                 this form. That's deliberate, not just a style choice:
+                 pos.config's own data is synced wholesale to the POS
+                 frontend, so a field living directly on this model would
+                 leak to the cashier's browser regardless of how the form
+                 displays it — see elitepoints_pos_credential.py. -->
             <xpath expr="//setting[@id='other_devices']" position="after">
                 <setting id="elitepoints_setting"
                          string="ElitePoints Loyalty"
                          help="Connect this specific shop to the ElitePoints loyalty network. Each shop needs its own API key — that's what tells ElitePoints which store a sale happened at, so a merchant with multiple shops in this database must give each one a different key.">
-                    <field name="elitepoints_api_key" placeholder="odok_live_..."/>
-                    <div class="content-group">
-                        <field name="elitepoints_api_secret" placeholder="odos_live_..." password="True"/>
-                    </div>
-                    <div class="content-group">
-                        <label for="elitepoints_base_url" string="API URL"/>
-                        <field name="elitepoints_base_url"/>
-                    </div>
-                    <div class="content-group">
-                        <button name="action_elitepoints_test_connection"
-                                type="object"
-                                string="Test Connection"
-                                class="btn-secondary"/>
-                    </div>
+                    <button name="action_open_elitepoints_credential"
+                            type="object"
+                            string="Configure ElitePoints Credentials"
+                            class="btn-secondary"/>
                 </setting>
             </xpath>
         </field>

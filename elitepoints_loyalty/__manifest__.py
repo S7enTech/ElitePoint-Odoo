@@ -1,6 +1,6 @@
 {
     'name': 'ElitePoints Loyalty',
-    'version': '18.0.2.0.0',
+    'version': '18.0.2.0.1',
     'category': 'Point of Sale',
     'summary': 'Reward and redeem ElitePoints loyalty points from Odoo Point of Sale',
     'description': """
@@ -29,6 +29,7 @@ to sign up.
     'depends': ['point_of_sale'],
     'data': [
         'security/ir.model.access.csv',
+        'views/elitepoints_pos_credential_views.xml',
         'views/pos_config_views.xml',
         'views/pos_order_views.xml',
         'data/product_data.xml',

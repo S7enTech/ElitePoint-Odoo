@@ -23,9 +23,11 @@ class ElitePointsClient(models.AbstractModel):
     credentials — and so the cached access token — are per-shop: a
     merchant with several physical stores sharing one Odoo database needs
     each shop authenticating as its own distinct ElitePoints store, not
-    all of them sharing one identity. See the README for the full
-    reasoning behind this (it used to be a single company-wide
-    ir.config_parameter).
+    all of them sharing one identity. The actual credential storage lives
+    on elitepoints.pos.credential, not on pos.config itself — see that
+    model's docstring for why. See the README for the full history (this
+    was previously a single company-wide ir.config_parameter, then briefly
+    plain fields on pos.config, which leaked secrets to the POS frontend).
     """
 
     _name = "elitepoints.client"
@@ -36,10 +38,10 @@ class ElitePointsClient(models.AbstractModel):
     # ------------------------------------------------------------------
 
     def _get_credentials(self, pos_config):
-        pos_config = pos_config.sudo()
-        api_key = pos_config.elitepoints_api_key
-        api_secret = pos_config.elitepoints_api_secret
-        base_url = pos_config.elitepoints_base_url or DEFAULT_BASE_URL
+        credential = pos_config.sudo()._elitepoints_get_credential()
+        api_key = credential.api_key
+        api_secret = credential.api_secret
+        base_url = (credential.base_url if credential else None) or DEFAULT_BASE_URL
         if not api_key or not api_secret:
             raise UserError(
                 _(
@@ -57,11 +59,13 @@ class ElitePointsClient(models.AbstractModel):
     # ------------------------------------------------------------------
 
     def _authenticate(self, pos_config, api_key, api_secret, base_url, force=False):
-        pos_config = pos_config.sudo()
+        credential = pos_config.sudo()._elitepoints_get_credential(
+            create_if_missing=True
+        )
 
         if not force:
-            cached_token = pos_config.elitepoints_access_token
-            cached_expiry = pos_config.elitepoints_token_expires_at
+            cached_token = credential.access_token
+            cached_expiry = credential.token_expires_at
             if (
                 cached_token
                 and cached_expiry
@@ -84,10 +88,10 @@ class ElitePointsClient(models.AbstractModel):
                 _("ElitePoints authentication failed: no access token returned.")
             )
 
-        pos_config.write(
+        credential.write(
             {
-                "elitepoints_access_token": access_token,
-                "elitepoints_token_expires_at": time.time() + expires_in,
+                "access_token": access_token,
+                "token_expires_at": time.time() + expires_in,
             }
         )
         return access_token
@@ -95,8 +99,8 @@ class ElitePointsClient(models.AbstractModel):
     def is_configured(self, pos_config):
         """Cheap, no-network check the POS frontend can call on session load
         to decide whether to show the ElitePoints button at all."""
-        pos_config = pos_config.sudo()
-        return bool(pos_config.elitepoints_api_key and pos_config.elitepoints_api_secret)
+        credential = pos_config.sudo()._elitepoints_get_credential()
+        return bool(credential.api_key and credential.api_secret)
 
     def test_connection(self, pos_config):
         """Verifies the credentials currently configured on this shop.

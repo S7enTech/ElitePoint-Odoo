@@ -39,7 +39,8 @@ POS button and dialog. Confirmed live:
   in this module's own code, none of them previously exercised until
   this pass. (This describes the initial App Store submission; see
   "v2: per-shop credentials for multi-store merchants" below for a real
-  architectural fix made after it went live.)
+  architectural fix made after it went live, and "v2.0.1" for a real
+  security bug that fix introduced and fixed within the same day.)
 
 ### A pre-existing Odoo 18 core bug, and how it's handled
 
@@ -269,6 +270,64 @@ any of them their own distinct key.
   payment, validation — and confirmed the order synced
   (`elitepoints_sync_status: synced`) with real points earned against the
   real staging backend, with the correct shop recorded on the order.
+
+## v2.0.1 (18.0.2.0.1): a real security bug in v2, and a second real bug it was hiding behind
+
+Running the full test suite above against the actual POS UI — not just
+the backend-level isolation tests — surfaced a genuine security bug in
+v2's own design, caught before it had any real-world exposure.
+
+**The credentials themselves were leaking to the cashier's browser.**
+`pos.config._load_pos_data_fields` returns `[]`, and in Odoo's own
+convention for that method, an empty list means "every field", not
+"none" — core's own default behavior for a model's own current record,
+not a bug in core. Storing `elitepoints_api_key`/`api_secret`/
+`access_token` as plain fields directly on `pos.config` put them inside
+that "every field" set: confirmed live, via
+`window.posmodel.config.elitepoints_api_secret`, that a shop's live API
+secret and access token were both sitting in plain sight in the POS
+frontend's own JS state — readable by any cashier via browser devtools.
+
+Fixed by moving credentials off `pos.config` entirely into a new
+`elitepoints.pos.credential` model — never part of Point of Sale's own
+synced-model list, so nothing in it reaches the frontend at all,
+regardless of what `_load_pos_data_fields` does. `pos.config` now only
+knows how to find (or create) its own credential record; the "Test
+Connection" UI moved from an inline field block to a smart button that
+opens the credential as its own small popup form. A migration
+(`migrations/18.0.2.0.1`) carries every shop's existing credentials
+into the new table and then **drops the old `pos_config` columns
+outright** — leaving them in place unreferenced would have meant the
+already-leaked secrets just kept sitting there with no access control
+at all.
+
+**Fixing it immediately surfaced a second, unrelated real bug, hidden
+behind the first.** With the leak fixed, a real redemption attempt
+through the POS UI crashed: `TypeError: Cannot read properties of
+undefined (reading 'taxes_id')`, deep inside Odoo core's
+`addLineToOrder`. Traced to `this.pos.models["product.product"].get()`
+returning `undefined` for the redemption product — the same failure
+mode as the original `sale_ok` bug, but a different cause this time:
+`pos.config._get_available_product_domain()` also requires a product to
+belong to one of the shop's configured POS categories
+(`limit_categories`/`iface_available_categ_ids`) when that restriction
+is enabled, and the synthetic redemption product has no category of its
+own. All three demo shops in this test environment have category
+restrictions configured — a realistic setup, not a staging-only
+quirk — so this would have broken redemption for any real merchant
+using category-limited POS screens. Fixed by overriding
+`_get_available_product_domain()` to `OR` the redemption product into
+the domain explicitly, rather than touching any merchant's own category
+configuration to route around it.
+
+Both confirmed fixed against the real staging backend: a full
+points-only sale and a full partial-redemption sale, run end to end
+through the actual POS UI from a genuinely fresh session (new tab,
+cleared asset cache, closed prior session — ruling out any stale-cache
+explanation for the earlier crash), both completing with no frontend
+error and `elitepoints_sync_status: synced` on the resulting order. Also
+re-confirmed the frontend no longer exposes any `elitepoints_*` key on
+`pos.config` at all after the fix.
 
 ### Testing locally with Docker
 
