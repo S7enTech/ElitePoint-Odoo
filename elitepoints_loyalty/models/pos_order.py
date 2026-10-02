@@ -198,6 +198,20 @@ class PosOrder(models.Model):
                     order.elitepoints_points_redeemed = result.get(
                         "pointsRedeemed", 0
                     )
+                    # A redemption is never a pure deduction: the backend
+                    # also earns points on whatever the customer still paid
+                    # (amount - redeem_amount) and applies it to the real
+                    # balance in the same call. Confirmed live that this
+                    # was being computed correctly all along but silently
+                    # dropped before it reached here — every redemption
+                    # order showed 0 points earned even though the
+                    # customer's actual balance had correctly gone up. The
+                    # backend's redeem_points response didn't return this
+                    # field at all until ElitePoint-Backend PR #202, which
+                    # is the other half of this fix.
+                    order.elitepoints_points_earned = result.get(
+                        "pointsEarned", 0
+                    )
                 else:
                     result = client.earn_points(
                         pos_config,

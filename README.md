@@ -329,6 +329,48 @@ error and `elitepoints_sync_status: synced` on the resulting order. Also
 re-confirmed the frontend no longer exposes any `elitepoints_*` key on
 `pos.config` at all after the fix.
 
+## A fifth bug — a redemption never earned points on what the customer still paid
+
+Asked directly: "a customer redeems part of their balance and pays the
+rest — do they also earn points on the remaining amount?" The honest
+answer at the time was that this had never actually been verified —
+every redemption test run against staging so far used amounts small
+enough (under $1 remaining) that 1% of the remainder rounds to $0.00,
+which would hide this exact gap either way.
+
+Re-ran it with a cart large enough to tell the difference either way
+(a $115 sale, redeeming a customer's full $2.19 balance, leaving
+$112.81 actually paid). The real balance moved from 2.19 to **exactly**
+1.13 — `2.19 − 2.19 + 1.13`, 1% of $112.81 rounded to two places — so
+the backend was correctly computing and applying the earn all along.
+But Odoo's own order record showed `elitepoints_points_earned: 0`
+regardless, on every redemption, every time.
+
+Traced to `ElitePoint-Backend`: `recordRedemption` computes `pointsEarned`
+on `amount - redeemAmount` and applies it to the customer's real balance
+correctly, but its HTTP response only ever returned
+`{status, pointsRedeemed}` — the earned figure never left the backend.
+Odoo's own sync code only read `pointsRedeemed` on that branch too, so
+even a fixed backend response would have gone unread. Both sides needed
+fixing:
+
+- **Backend** ([S7enTech/ElitePoint-Backend#202](https://github.com/S7enTech/ElitePoint-Backend/pull/202)):
+  added `pointsEarned` to `RedeemPointsResult` and all three return paths
+  in `recordRedemption` — the normal success path, and both replay paths
+  for a duplicate/concurrent post (which now replay the originally-earned
+  figure instead of silently dropping it on retry). Covered by a new test
+  asserting the returned value; the existing 12 tests in that file all
+  still pass unchanged.
+- **This module**: `_sync_elitepoints`'s redeem branch now also reads
+  `result.get("pointsEarned", 0)` into `order.elitepoints_points_earned`,
+  the same way the earn branch always has.
+
+Deployed the backend fix to the shared ElitePoints staging environment
+(not just the disposable Odoo-only test project) and re-ran the exact
+same $115/$2.19 scenario end to end through the real POS UI: Odoo's own
+order record now shows a nonzero earned figure matching the real
+balance change, where before it always showed 0.
+
 ### Testing locally with Docker
 
 `odoo.com/trial` (Odoo Online) doesn't let you pick a version — it always
