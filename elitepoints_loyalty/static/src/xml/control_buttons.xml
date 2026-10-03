@@ -11,9 +11,23 @@
              POS screen. Anchor on the always-present "Actions" button
              instead. -->
         <xpath expr="//button[hasclass('more-btn')]" position="before">
+            <!-- On a small screen this button renders inside
+                 ControlButtonsPopup (core's "Actions" overflow sheet), whose
+                 root Dialog has t-on-click="props.close" so any click inside
+                 it closes the whole sheet — correct for the sheet's other
+                 buttons, which perform one action and are done. Ours opens a
+                 second dialog instead, and that dialog's async confirm
+                 callback still needs this component's own services
+                 (this.orm/this.notification) once the lookup resolves. An
+                 unstopped click destroys this component in the same tick it
+                 opens ours, so by the time Apply fires, this.orm belongs to
+                 an already-torn-down instance and throws before dispatching
+                 anything — surfacing as "Could not link this sale" with no
+                 request ever sent. .stop keeps this component alive behind
+                 the ElitePoints dialog instead of racing its own teardown. -->
             <button t-if="showElitePointsButton"
                     class="btn btn-light btn-lg lh-lg flex-shrink-0 elitepoints-control-button"
-                    t-on-click="clickElitePoints">
+                    t-on-click.stop="clickElitePoints">
                 <i class="fa fa-star me-1" role="img" aria-label="ElitePoints" title="ElitePoints"/>
                 ElitePoints
             </button>
