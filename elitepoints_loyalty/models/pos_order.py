@@ -95,31 +95,70 @@ class PosOrder(models.Model):
             )
             pending.unlink()
 
+    def _elitepoints_apply_refund_source(self):
+        """A refund order never carries its own elitepoints_customer_ref —
+        that field (like every field this module adds to pos.order) is
+        copy=False, and core's own _prepare_refund_values() has no idea
+        this module exists. Without this, _sync_elitepoints_reversal below
+        would have no customer to reverse anything for, and a refund of an
+        ElitePoints-synced sale would silently do nothing — the exact gap
+        this whole method exists to close.
+
+        refunded_order_id is a non-stored compute (lines.refunded_orderline_id
+        .order_id), not something staged ahead of time, so this has to run
+        after the order and its lines both exist — same reason
+        _elitepoints_apply_pending_sync runs from create()/write() rather
+        than at the field-definition level.
+        """
+        for order in self:
+            if order.elitepoints_customer_ref:
+                continue
+            original = order.refunded_order_id
+            if not original or original.elitepoints_sync_status != "synced":
+                continue
+            order.write(
+                {
+                    "elitepoints_customer_ref": original.elitepoints_customer_ref,
+                    "elitepoints_identifier": original.elitepoints_identifier,
+                }
+            )
+
     @api.model_create_multi
     def create(self, vals_list):
         orders = super().create(vals_list)
         orders._elitepoints_apply_pending_sync()
-        for order in orders:
-            if (
-                order.elitepoints_customer_ref
-                and order.state in SYNCABLE_STATES
-                and order.elitepoints_sync_status in ("not_applicable", False)
-            ):
-                order.elitepoints_sync_status = "pending"
-                order._sync_elitepoints()
+        orders._elitepoints_apply_refund_source()
+        orders._elitepoints_dispatch_sync()
         return orders
 
     def write(self, vals):
         result = super().write(vals)
         if vals.get("state") in SYNCABLE_STATES:
             self._elitepoints_apply_pending_sync()
-            for order in self:
-                if (
-                    order.elitepoints_customer_ref
-                    and order.elitepoints_sync_status in ("not_applicable", "pending", "failed", False)
-                ):
-                    order._sync_elitepoints()
+            self._elitepoints_apply_refund_source()
+            self._elitepoints_dispatch_sync()
         return result
+
+    def _elitepoints_dispatch_sync(self):
+        """Routes each order to the sync it actually needs: a refund order
+        (refunded_order_id set) reverses the sale it refunds; anything else
+        with a customer attached earns or redeems normally. An order that is
+        neither — no customer looked up, or a refund of a sale that was
+        never itself ElitePoints-synced — gets no sync call at all; its
+        status is set by whichever method would have handled it, the same
+        way it always was for a plain order with no customer.
+        """
+        for order in self:
+            if order.state not in SYNCABLE_STATES:
+                continue
+            if order.elitepoints_sync_status not in ("not_applicable", "pending", "failed", False):
+                continue
+            if order.refunded_order_id:
+                order.elitepoints_sync_status = "pending"
+                order._sync_elitepoints_reversal()
+            elif order.elitepoints_customer_ref:
+                order.elitepoints_sync_status = "pending"
+                order._sync_elitepoints()
 
     # ------------------------------------------------------------------
     # Sync
@@ -241,6 +280,67 @@ class PosOrder(models.Model):
                 order.elitepoints_sync_status = "failed"
                 order.elitepoints_sync_error = str(exc)
 
+    def _sync_elitepoints_reversal(self):
+        """Posts a refund order to ElitePoints as a reversal of the sale it
+        refunds. Mirrors _sync_elitepoints's own promise not to raise: a
+        network hiccup must not block a cashier who has already handed the
+        money back. Failures are recorded the same way and picked up by the
+        same retry cron.
+        """
+        client = self.env["elitepoints.client"]
+        for order in self:
+            if order.elitepoints_sync_status == "synced":
+                continue
+            original = order.refunded_order_id
+            if not order.elitepoints_customer_ref or not original:
+                order.elitepoints_sync_status = "not_applicable"
+                continue
+            if order.elitepoints_sync_attempts >= MAX_SYNC_ATTEMPTS:
+                continue
+
+            order.elitepoints_sync_attempts += 1
+            pos_config = order.config_id
+            original_external_transaction_id = (
+                original.pos_reference or f"pos-order-{original.id}"
+            )
+            # The refund order's own pos_reference is copied from the order
+            # it refunds (core's _prepare_refund_values), so it collides
+            # with the original and can't double as this reversal's own
+            # idempotency key. uuid is always freshly generated for a
+            # refund order by that same method, so it uniquely identifies
+            # THIS reversal instead.
+            external_transaction_id = order.uuid
+
+            try:
+                result = client.reverse_transaction(
+                    pos_config,
+                    original_external_transaction_id=original_external_transaction_id,
+                    refund_amount=abs(order.amount_total),
+                    description=f"Refund of {original.pos_reference or original.name}",
+                    external_transaction_id=external_transaction_id,
+                )
+                # Signed to match how the backend records its own reversal
+                # transaction: negative because these are points leaving
+                # the earned total / re-entering the balance, not a fresh
+                # earn or redeem in their own right.
+                order.elitepoints_points_earned = -result.get(
+                    "pointsClawedBack", 0
+                )
+                order.elitepoints_points_redeemed = -result.get(
+                    "pointsReturned", 0
+                )
+                order.elitepoints_sync_status = "synced"
+                order.elitepoints_sync_error = False
+            except Exception as exc:  # noqa: BLE001 - must never propagate
+                _logger.error(
+                    "ElitePoints reversal sync failed for POS refund order %s (attempt %s): %s",
+                    order.id,
+                    order.elitepoints_sync_attempts,
+                    exc,
+                )
+                order.elitepoints_sync_status = "failed"
+                order.elitepoints_sync_error = str(exc)
+
     @api.model
     def _elitepoints_retry_failed_syncs(self):
         failed_orders = self.search(
@@ -250,11 +350,15 @@ class PosOrder(models.Model):
             ],
             limit=100,
         )
-        if failed_orders:
-            _logger.info(
-                "Retrying ElitePoints sync for %s order(s)", len(failed_orders)
-            )
-            failed_orders._sync_elitepoints()
+        if not failed_orders:
+            return
+
+        _logger.info(
+            "Retrying ElitePoints sync for %s order(s)", len(failed_orders)
+        )
+        refunds = failed_orders.filtered(lambda o: o.refunded_order_id)
+        (failed_orders - refunds)._sync_elitepoints()
+        refunds._sync_elitepoints_reversal()
 
     # ------------------------------------------------------------------
     # RPC surface for the POS frontend

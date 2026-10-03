@@ -300,3 +300,23 @@ class ElitePointsClient(models.AbstractModel):
             pos_config, "POST", "/odoo/points/redeem", json_body=body
         )
         return result.get("data") or {}
+
+    def reverse_transaction(
+        self,
+        pos_config,
+        original_external_transaction_id,
+        refund_amount,
+        description,
+        external_transaction_id=None,
+    ):
+        body = {
+            "originalExternalTransactionId": original_external_transaction_id,
+            "refundAmount": refund_amount,
+            "description": description,
+        }
+        if external_transaction_id:
+            body["externalTransactionId"] = external_transaction_id
+        result = self._authed_request(
+            pos_config, "POST", "/odoo/points/reverse", json_body=body
+        )
+        return result.get("data") or {}
