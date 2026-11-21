@@ -539,7 +539,7 @@ sticks as `failed`, exactly as if it were a network timeout. Nothing is
 harmed — the refusal is idempotent and the order ends in the right state
 — but a 4xx that can never succeed does not deserve eight attempts.
 Distinguishing a permanent refusal from a transient failure is its own
-change, not this one.
+change, not this one — done in v2.3 below.
 
 ### No migration, and why the retry queue does not need one
 
@@ -592,6 +592,175 @@ because `refundAmount` is measured as a proportion of the original
 (the alternative is clawing back a 1,500th of the points), but it has to
 be fixed in the data, not worked around here by sending a currency the
 sale was not actually in.
+## v2.3 (18.0.2.3.0): a 4xx refusal was retried eight times like a timeout
+
+`_sync_elitepoints` and `_sync_elitepoints_reversal` both end in
+`except Exception` — deliberately, and that part is not changing: a sync
+failure must never reach the cashier, because the sale has already been
+paid for. But every exception caught there was recorded the same way,
+as `failed`, and `elitepoints_retry_failed_syncs` then retried it every
+15 minutes up to `MAX_SYNC_ATTEMPTS` (8).
+
+That is right for a timeout, a connection reset, or a 5xx. It is wrong
+for a 4xx. Nothing here stores an API payload: the retry queues *orders*,
+by `elitepoints_sync_status = 'failed'`, and `_sync_elitepoints` rebuilds
+the request from the order from scratch on every attempt (the same
+property v2.2 leaned on to avoid needing a migration). So a refusal of the
+payload is a refusal of all eight attempts, spread across two hours of
+error logs for a result that was settled at the first one.
+
+Nothing was ever corrupted by this. The refusals are idempotent, the
+order ends in the state it should, and the error message was always
+recorded. It is a correctness-of-effort and log-noise problem, which is
+why it sat unaddressed for three releases: until v2.2 above there was no
+routine way to *earn* a 4xx at all. Now that every call carries its
+currency, a shop whose POS session runs in a non-NGN currency sends e.g.
+`currency: "USD"` and the backend refuses it, because
+`SUPPORTED_TRANSACTION_CURRENCIES` is `['NGN']` and nothing else — which
+is the right refusal, and v2.2 says why. Every such order would burn the
+full eight attempts before sticking. This is the follow-up that section
+said it needed.
+
+### The status code was being thrown away before the sync could see it
+
+The actual blocker, and the reason this was its own change rather than a
+line in v2.2: `elitepoints_client.py` converted every HTTP failure into a
+`UserError` carrying only a human-readable message. By the time
+`_sync_elitepoints` caught it, the only thing left of a 400 was prose —
+and classifying a failure by pattern-matching a translated error string
+is not a thing worth building.
+
+So the status code now travels with the exception. It is attached as an
+attribute to a plain `UserError`, **not** carried by a `UserError`
+subclass, and that is the one non-obvious decision in this change: Odoo
+serialises an exception to the web client under its fully-qualified name,
+and the web client chooses which dialog to show by looking that name up
+in its `error_dialogs` registry — where `odoo.exceptions.UserError` is
+registered and an addon's own subclass is not. A subclass would have
+risked turning the clean warning an admin gets from **Configure
+ElitePoints Credentials > Test Connection** into a raw traceback dialog.
+Tagging an attribute leaves the exception's identity exactly what it was,
+so there is no frontend behaviour to re-verify at all.
+
+Read it back with `elitepoints_status_code(exc)`, which reports `None`
+for anything that never carried one. `None` counts as transient, so
+every non-HTTP failure — timeout, DNS, connection reset, unreadable
+body, a shop with no credentials entered yet — and every exception that
+did not come from the client keeps exactly the retry behaviour it has
+today. Unrecognised means "try again", never "give up".
+
+### A separate terminal state, not a faked-out attempt counter
+
+A permanent refusal is now recorded as a new `elitepoints_sync_status`
+of `rejected`, and `_elitepoints_retry_failed_syncs` searches for
+`failed` — so a rejected order leaves the retry queue by not being in it.
+
+The cheaper alternative was to keep the status at `failed` and set
+`elitepoints_sync_attempts` to `MAX_SYNC_ATTEMPTS`, which the existing
+cron filter would also exclude. That was rejected for two reasons. It
+lies in the one field anyone would read to find out how hard this order
+was tried, and it is indistinguishable after the fact from an order that
+genuinely exhausted eight attempts against a backend that was down — so
+the "was this refused, or did we give up?" question, which is the whole
+distinction being introduced, would be unanswerable from the record.
+
+`_elitepoints_dispatch_sync`'s status check is an allow-list, so
+`rejected` is excluded from re-dispatch by omission, alongside `synced`.
+Both sync methods skip it too, so a direct call cannot re-post it either.
+
+The error message stays visible. `elitepoints_sync_error` was shown on
+the ElitePoints tab only for `failed`, and now shows for `rejected` as
+well — on a rejected order that message is the entire record of why
+nothing will ever try again. The status badge renders `rejected` in
+warning colours rather than danger, in both the form and the optional
+list column, so the two are distinguishable at a glance.
+
+### Which statuses count as permanent, and why the list is so short
+
+`PERMANENT_REFUSAL_STATUS_CODES` is `{400, 422}`.
+
+That is narrower than "every 4xx" on purpose, because the two ways of
+getting this wrong do not cost the same. A transient failure wrongly
+called permanent is a sync abandoned for good and points a customer
+never receives. A permanent refusal wrongly called transient is eight
+wasted attempts and some log noise — the thing being fixed here, and by
+a wide margin the cheaper mistake. So the set holds only statuses that
+are a pure function of a request body this module rebuilds identically
+every time:
+
+* **400** — the backend's own validation refusals: an unsupported
+  transaction currency, an `amount` that does not match the sum of its
+  line items, a refund larger than what is still reversible on the sale
+  it refunds.
+* **422** — not returned by any ElitePoints endpoint today, included
+  because it means the same thing.
+
+Three 4xx that look permanent and deliberately keep retrying:
+
+* **401 / 403** — a rejected or revoked store credential.
+  `_authed_request` already force-refreshes the token and retries a 401
+  once, so reaching the handler means the key itself is wrong. An admin
+  re-entering it makes the next cron run succeed, which is precisely
+  what a terminal state would prevent.
+* **404** — usually permanent (a customer ref that does not exist), but
+  not reliably so. A reversal 404s when the sale it reverses has not
+  reached the backend yet, and a later attempt resolves that on its own.
+
+5xx, 408 and 429 are transient by definition and unchanged.
+
+### No migration, and what happens to orders already stuck
+
+Adding a value to a `Selection` needs no migration — Odoo stores it as a
+plain string column — and nothing stored anywhere holds a status that
+needs rewriting. So this ships no `migrations/` directory, same as v2.2.
+
+Orders already sitting in `failed` from a 400 are **not** reclassified by
+the upgrade. They keep retrying until they hit eight attempts and then
+stop, exactly as they do today. That is deliberate: the work to go back
+and re-derive why each one failed, from a stored message rather than a
+status code that was never recorded, buys nothing a bounded retry does
+not already give for free. New refusals are classified from the first
+attempt.
+
+There is also no in-app way to requeue a `rejected` order. See the
+out-of-scope list below for why that is a separate question.
+
+### What this actually costs now, measured
+
+No running Odoo was available, so this was verified by driving the real
+`_sync_elitepoints` and the real `_raise_for_status` directly, with
+`odoo`/`requests` stubbed, a fake client raising what each HTTP status
+would really produce, and a loop applying the retry cron's own domain
+(`status = 'failed'` and `attempts < 8`) until it stopped. Attempt counts
+below are what the code did, not what it should do:
+
+| Failure | Final status | Attempts | Cron retries |
+| --- | --- | --- | --- |
+| 400, unsupported currency (USD) | `rejected` | 1 | 0 |
+| 400, amount/items mismatch | `rejected` | 1 | 0 |
+| 422 | `rejected` | 1 | 0 |
+| 401, bad store credential | `failed` | 8 | 7 |
+| 404, customer not found | `failed` | 8 | 7 |
+| 429, rate limited | `failed` | 8 | 7 |
+| 500 | `failed` | 8 | 7 |
+| network timeout (no status) | `failed` | 8 | 7 |
+
+So a USD sale costs one attempt where it used to cost eight, and nothing
+else moved. `elitepoints_sync_error` held the backend's own message in
+every one of those rows, and no exception escaped `_sync_elitepoints` in
+any of them — the promise to the cashier is unchanged.
+
+Two properties were checked separately because they are the ones a
+refactor would quietly break: the exception raised for a 4xx is still
+`odoo.exceptions.UserError` *exactly*, not a subclass (so the web
+client's dialog behaviour cannot have changed), and
+`is_permanent_refusal` returns `False` for a bare `UserError`, a
+`ValueError`, and a `KeyError` — anything it cannot positively identify
+as a refusal keeps retrying.
+
+Still worth doing against a real till before release: a POS sale in a USD
+shop, confirming the order lands on `rejected` with the refusal visible
+on the ElitePoints tab, and that the cashier's checkout is undisturbed.
 
 ## What's deliberately out of scope here
 
@@ -608,5 +777,14 @@ sale was not actually in.
   settlement that may no longer be open is a different, higher-stakes
   problem than the customer-facing points leak this release closes. Needs
   its own scoping, not a side effect of this one.
+- Requeuing a `rejected` order from the UI (v2.3) — there is no button,
+  and `elitepoints_sync_status` is a readonly field, so clearing it back
+  to `pending` means a server-side write from the shell. That is the
+  right amount of friction for now: every refusal this release can
+  actually produce is one where re-posting the same order would be
+  wrong, not merely futile — a USD sale cannot be scored in NGN by
+  trying again. An affordance for "I have fixed the cause, try this one
+  again" needs to be designed around a refusal that someone can really
+  fix, and there isn't one yet.
 - ~~Multi-store-per-Odoo-database support~~ — resolved in v2 (see above):
   each shop now has its own ElitePoints credentials.

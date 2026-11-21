@@ -2,6 +2,8 @@ import logging
 
 from odoo import api, fields, models
 
+from .elitepoints_client import is_permanent_refusal
+
 _logger = logging.getLogger(__name__)
 
 SYNC_STATES = [
@@ -9,6 +11,13 @@ SYNC_STATES = [
     ("pending", "Pending"),
     ("synced", "Synced"),
     ("failed", "Failed"),
+    # Terminal, and the whole point of being a separate state rather than
+    # a flavour of "failed": ElitePoints refused the request itself, so
+    # there is nothing a retry could change. `_elitepoints_retry_failed_syncs`
+    # only ever looks for "failed", so a rejected order drops out of the
+    # retry queue by virtue of not being in it — no extra filter needed,
+    # and no attempt counter fiddled with to fake exhaustion.
+    ("rejected", "Refused by ElitePoints (not retried)"),
 ]
 
 # Orders reach a terminal paid state through more than one code path
@@ -151,6 +160,10 @@ class PosOrder(models.Model):
         for order in self:
             if order.state not in SYNCABLE_STATES:
                 continue
+            # An allow-list, so "synced" and "rejected" are both excluded
+            # by omission — a later write() landing this order in another
+            # syncable state must not re-post something ElitePoints has
+            # already accepted, or already refused outright.
             if order.elitepoints_sync_status not in ("not_applicable", "pending", "failed", False):
                 continue
             if order.refunded_order_id:
@@ -232,10 +245,19 @@ class PosOrder(models.Model):
         block a cashier from finishing a sale that has already been paid
         for. Failures are recorded on the order and retried by
         ir.cron `elitepoints_retry_failed_syncs`.
+
+        A failure ElitePoints *chose* — an HTTP status in
+        PERMANENT_REFUSAL_STATUS_CODES — is recorded as `rejected`
+        instead, which that cron does not pick up. The request is rebuilt
+        from the order from scratch on every attempt, so a refusal of the
+        payload is a refusal of all eight attempts; retrying it just
+        spreads the same 400 across two hours of logs. The message still
+        lands in `elitepoints_sync_error` either way, which is where
+        anyone looking at the order will read why.
         """
         client = self.env["elitepoints.client"]
         for order in self:
-            if order.elitepoints_sync_status == "synced":
+            if order.elitepoints_sync_status in ("synced", "rejected"):
                 continue
             if not order.elitepoints_customer_ref:
                 order.elitepoints_sync_status = "not_applicable"
@@ -302,25 +324,30 @@ class PosOrder(models.Model):
                 order.elitepoints_sync_status = "synced"
                 order.elitepoints_sync_error = False
             except Exception as exc:  # noqa: BLE001 - must never propagate
+                permanent = is_permanent_refusal(exc)
                 _logger.error(
-                    "ElitePoints sync failed for POS order %s (attempt %s): %s",
+                    "ElitePoints sync %s for POS order %s (attempt %s): %s",
+                    "refused for good" if permanent else "failed",
                     order.id,
                     order.elitepoints_sync_attempts,
                     exc,
                 )
-                order.elitepoints_sync_status = "failed"
+                order.elitepoints_sync_status = (
+                    "rejected" if permanent else "failed"
+                )
                 order.elitepoints_sync_error = str(exc)
 
     def _sync_elitepoints_reversal(self):
         """Posts a refund order to ElitePoints as a reversal of the sale it
         refunds. Mirrors _sync_elitepoints's own promise not to raise: a
         network hiccup must not block a cashier who has already handed the
-        money back. Failures are recorded the same way and picked up by the
-        same retry cron.
+        money back. Failures are recorded the same way, classified the
+        same way, and picked up by the same retry cron — except for the
+        permanent refusals, which it leaves alone.
         """
         client = self.env["elitepoints.client"]
         for order in self:
-            if order.elitepoints_sync_status == "synced":
+            if order.elitepoints_sync_status in ("synced", "rejected"):
                 continue
             original = order.refunded_order_id
             if not order.elitepoints_customer_ref or not original:
@@ -369,17 +396,25 @@ class PosOrder(models.Model):
                 order.elitepoints_sync_status = "synced"
                 order.elitepoints_sync_error = False
             except Exception as exc:  # noqa: BLE001 - must never propagate
+                permanent = is_permanent_refusal(exc)
                 _logger.error(
-                    "ElitePoints reversal sync failed for POS refund order %s (attempt %s): %s",
+                    "ElitePoints reversal sync %s for POS refund order %s "
+                    "(attempt %s): %s",
+                    "refused for good" if permanent else "failed",
                     order.id,
                     order.elitepoints_sync_attempts,
                     exc,
                 )
-                order.elitepoints_sync_status = "failed"
+                order.elitepoints_sync_status = (
+                    "rejected" if permanent else "failed"
+                )
                 order.elitepoints_sync_error = str(exc)
 
     @api.model
     def _elitepoints_retry_failed_syncs(self):
+        # "failed" and not "rejected": an order ElitePoints refused outright
+        # is never retried, however few attempts it has used. See SYNC_STATES
+        # and PERMANENT_REFUSAL_STATUS_CODES in elitepoints_client.py.
         failed_orders = self.search(
             [
                 ("elitepoints_sync_status", "=", "failed"),
