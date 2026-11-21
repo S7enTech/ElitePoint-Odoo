@@ -482,6 +482,40 @@ outcome: it lands on the order in `elitepoints_sync_error` where someone
 can see it. Quietly dropping a malformed code would instead hand the sale
 straight back to the NGN default this change exists to stop using.
 
+### What a USD shop actually sees after this change
+
+Worth being blunt about, because "send the real currency" sounds purely
+like an improvement and for a foreign-currency shop it is not a silent one.
+
+`SUPPORTED_TRANSACTION_CURRENCIES` on the backend is `['NGN']` and nothing
+else, and core enforces it on all three paths
+(`LoyaltyIntegrationService.assertCurrencyIsSupported`) with a
+`BadRequestException`. So a shop whose POS session runs in USD goes from:
+
+* **before** — the sale syncs, and the customer earns points as though
+  every dollar were a naira. Wrong, invisible, and a real balance
+  liability.
+* **after** — the sale is refused with *"Transactions priced in USD are
+  not supported. ElitePoints settles in NGN, and a point is one NGN, so a
+  USD sale cannot be scored without mis-stating what the points are
+  worth."* The message lands on the order in `elitepoints_sync_error`,
+  the order shows `failed`, and the customer earns nothing.
+
+Earning nothing is the correct answer — the platform genuinely cannot
+score that sale — and a visible refusal is strictly better than an
+invisible wrong number. But it is a behaviour change a merchant will
+notice, so it belongs in release notes rather than being discovered at a
+till.
+
+One wart this exposes, pre-existing and deliberately not fixed here:
+`_sync_elitepoints` catches every exception alike, so a permanent 400 is
+retried by the cron the full `MAX_SYNC_ATTEMPTS` (8) times before it
+sticks as `failed`, exactly as if it were a network timeout. Nothing is
+harmed — the refusal is idempotent and the order ends in the right state
+— but a 4xx that can never succeed does not deserve eight attempts.
+Distinguishing a permanent refusal from a transient failure is its own
+change, not this one.
+
 ### No migration, and why the retry queue does not need one
 
 Worth stating explicitly, because the shape of this module invites the
