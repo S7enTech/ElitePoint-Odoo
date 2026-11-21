@@ -15,6 +15,84 @@ REQUEST_TIMEOUT = 15
 # in-flight order never gets caught mid-refresh.
 TOKEN_EXPIRY_BUFFER_SECONDS = 60
 
+# HTTP statuses where the server refused the request itself rather than
+# failed to serve it. An identical retry can only ever earn the identical
+# refusal, so pos.order's sync marks these terminal instead of handing
+# them to the retry cron — see _sync_elitepoints there.
+#
+# Deliberately narrow, because the two ways of getting this wrong do not
+# cost the same. A transient failure wrongly called permanent is a sync
+# abandoned for good and points a customer never receives; a permanent
+# refusal wrongly called transient is eight wasted cron attempts and some
+# log noise — which is the thing being fixed here, and much the cheaper
+# mistake. So this holds only statuses that are a pure function of the
+# request body, which the sync rebuilds identically on every attempt:
+#
+#   400 - the backend's own validation refusals: a transaction currency
+#         outside SUPPORTED_TRANSACTION_CURRENCIES, an amount that does
+#         not match the sum of its line items, a refund larger than what
+#         is still reversible on the sale it refunds.
+#   422 - not returned by any ElitePoints endpoint today. Included
+#         because it means the same thing, so an endpoint that later
+#         prefers it is classified right without a change here.
+#
+# Everything else keeps the retry behaviour it has always had, including
+# the 4xx that look permanent and are not:
+#
+#   401/403 - a rejected or revoked store credential. _authed_request
+#             already force-refreshes the token and retries a 401 once,
+#             so getting here means the key itself is wrong. An admin
+#             re-entering it makes the next cron attempt succeed, which
+#             is exactly what a terminal state would prevent.
+#   404     - usually permanent (a customer ref that does not exist), but
+#             not reliably: a reversal 404s when the sale it reverses has
+#             not landed in the backend yet, and a later attempt fixes
+#             that on its own.
+#   408/429 - transient by definition.
+#   5xx     - transient by definition.
+PERMANENT_REFUSAL_STATUS_CODES = frozenset({400, 422})
+
+
+def _api_error(message, status_code=None):
+    """Builds the UserError this client raises for a failed request,
+    tagged with the HTTP status it came from.
+
+    The status rides on a plain UserError rather than on a UserError
+    subclass deliberately. Odoo serialises an exception to the web client
+    under its fully-qualified name, and the client chooses which dialog to
+    show by looking that name up in its `error_dialogs` registry — where
+    `odoo.exceptions.UserError` is registered and an addon's own subclass
+    is not. A subclass would therefore risk downgrading the clean warning
+    an admin gets from Configure ElitePoints Credentials > Test Connection
+    into a raw traceback dialog. Tagging an attribute instead leaves the
+    exception's identity exactly what it was before this change, so there
+    is no frontend behaviour to re-verify.
+
+    Read it back with elitepoints_status_code(), which reports None for
+    an exception that never carried one — every non-HTTP failure (timeout,
+    DNS, connection reset, unreadable body, a shop with no credentials
+    entered yet) arrives that way, and None is treated as transient.
+    """
+    error = UserError(message)
+    error.elitepoints_status_code = status_code
+    return error
+
+
+def elitepoints_status_code(exc):
+    """The HTTP status an exception from this client carries, or None."""
+    return getattr(exc, "elitepoints_status_code", None)
+
+
+def is_permanent_refusal(exc):
+    """True when retrying the identical request can only be refused again.
+
+    Anything this cannot positively identify as a refusal — including
+    every exception that did not come from this client at all — is
+    reported as not permanent, so an unrecognised failure keeps the retry
+    behaviour it has today rather than being quietly abandoned.
+    """
+    return elitepoints_status_code(exc) in PERMANENT_REFUSAL_STATUS_CODES
+
 
 class ElitePointsClient(models.AbstractModel):
     """Thin HTTP client for the ElitePoints ERP integration API.
@@ -128,38 +206,49 @@ class ElitePointsClient(models.AbstractModel):
                 timeout=REQUEST_TIMEOUT,
             )
         except requests.exceptions.Timeout as exc:
-            raise UserError(
+            raise _api_error(
                 _("ElitePoints did not respond in time. Please try again.")
             ) from exc
         except requests.exceptions.ConnectionError as exc:
-            raise UserError(
+            raise _api_error(
                 _(
                     "Could not reach ElitePoints. Check your internet "
                     "connection and try again."
                 )
             ) from exc
         except requests.exceptions.RequestException as exc:
-            raise UserError(_("ElitePoints request failed: %s") % exc) from exc
+            raise _api_error(_("ElitePoints request failed: %s") % exc) from exc
 
         if response.status_code >= 400:
-            message = self._extract_error_message(response)
-            _logger.warning(
-                "ElitePoints API error %s on %s %s: %s",
-                response.status_code,
-                method,
-                path,
-                message,
-            )
-            raise UserError(_("ElitePoints error: %s") % message)
+            self._raise_for_status(response, method, path)
 
         if not response.content:
             return {}
         try:
             return response.json()
         except ValueError as exc:
-            raise UserError(
+            raise _api_error(
                 _("ElitePoints returned an unreadable response.")
             ) from exc
+
+    def _raise_for_status(self, response, method, path):
+        """Turns a >= 400 response into the exception both request methods
+        raise. Always raises; never returns. Shared so the status code they
+        now attach cannot drift between them — before this it was the same
+        ten lines twice.
+        """
+        message = self._extract_error_message(response)
+        _logger.warning(
+            "ElitePoints API error %s on %s %s: %s",
+            response.status_code,
+            method,
+            path,
+            message,
+        )
+        raise _api_error(
+            _("ElitePoints error: %s") % message,
+            status_code=response.status_code,
+        )
 
     @staticmethod
     def _extract_error_message(response):
@@ -182,18 +271,18 @@ class ElitePointsClient(models.AbstractModel):
                 method, url, json=json_body, headers=headers, timeout=REQUEST_TIMEOUT
             )
         except requests.exceptions.Timeout as exc:
-            raise UserError(
+            raise _api_error(
                 _("ElitePoints did not respond in time. Please try again.")
             ) from exc
         except requests.exceptions.ConnectionError as exc:
-            raise UserError(
+            raise _api_error(
                 _(
                     "Could not reach ElitePoints. Check your internet "
                     "connection and try again."
                 )
             ) from exc
         except requests.exceptions.RequestException as exc:
-            raise UserError(_("ElitePoints request failed: %s") % exc) from exc
+            raise _api_error(_("ElitePoints request failed: %s") % exc) from exc
 
         if response.status_code == 401 and not _retried:
             # Cached token was rejected (expired early, or revoked
@@ -204,22 +293,14 @@ class ElitePointsClient(models.AbstractModel):
             )
 
         if response.status_code >= 400:
-            message = self._extract_error_message(response)
-            _logger.warning(
-                "ElitePoints API error %s on %s %s: %s",
-                response.status_code,
-                method,
-                path,
-                message,
-            )
-            raise UserError(_("ElitePoints error: %s") % message)
+            self._raise_for_status(response, method, path)
 
         if not response.content:
             return {}
         try:
             return response.json()
         except ValueError as exc:
-            raise UserError(
+            raise _api_error(
                 _("ElitePoints returned an unreadable response.")
             ) from exc
 

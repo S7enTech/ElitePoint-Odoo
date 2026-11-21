@@ -14,6 +14,7 @@
                             <field name="elitepoints_sync_status" widget="badge"
                                    decoration-success="elitepoints_sync_status == 'synced'"
                                    decoration-danger="elitepoints_sync_status == 'failed'"
+                                   decoration-warning="elitepoints_sync_status == 'rejected'"
                                    decoration-muted="elitepoints_sync_status == 'not_applicable'"/>
                         </group>
                         <group>
@@ -22,7 +23,10 @@
                             <field name="elitepoints_points_redeemed"/>
                         </group>
                     </group>
-                    <field name="elitepoints_sync_error" invisible="elitepoints_sync_status != 'failed'"/>
+                    <!-- Visible for 'rejected' too, not just 'failed': on a
+                         rejected order this message is the entire record of
+                         why nothing will ever retry it. -->
+                    <field name="elitepoints_sync_error" invisible="elitepoints_sync_status not in ['failed', 'rejected']"/>
                 </page>
             </xpath>
         </field>
@@ -36,7 +40,8 @@
             <xpath expr="//list" position="inside">
                 <field name="elitepoints_sync_status" optional="hide" widget="badge"
                        decoration-success="elitepoints_sync_status == 'synced'"
-                       decoration-danger="elitepoints_sync_status == 'failed'"/>
+                       decoration-danger="elitepoints_sync_status == 'failed'"
+                       decoration-warning="elitepoints_sync_status == 'rejected'"/>
             </xpath>
         </field>
     </record>

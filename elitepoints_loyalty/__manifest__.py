@@ -1,6 +1,6 @@
 {
     'name': 'ElitePoints Loyalty',
-    'version': '18.0.2.2.0',
+    'version': '18.0.2.3.0',
     'category': 'Point of Sale',
     'summary': 'Reward and redeem ElitePoints loyalty points from Odoo Point of Sale',
     'description': """
@@ -18,7 +18,8 @@ Connects your Odoo Point of Sale to the ElitePoints loyalty network.
 * Redeem points against the current sale.
 * Points are earned automatically on the remaining amount when an order is paid.
 * Failed syncs are queued and retried automatically, so a network hiccup never
-  blocks checkout.
+  blocks checkout. A sale ElitePoints refuses outright is flagged on the order
+  with the reason instead of being retried pointlessly.
 
 Requires an active ElitePoints merchant account. Visit https://myelitepoints.com
 to sign up.
