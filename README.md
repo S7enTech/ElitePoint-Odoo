@@ -462,11 +462,36 @@ backward-compatibility concession to exactly the version of this module
 that merchants are running today.
 
 That default was the last remaining path on the whole platform where a
-foreign-currency sale is scored as if it were Naira. A shop whose POS
-session runs in USD earned a customer points as though every dollar were a
-naira — roughly 1,500x the points the sale was worth — and nothing on
-either side recorded that a conversion had been assumed, because from the
-backend's point of view nothing had: the request simply didn't say.
+foreign-currency sale could be scored as if it were Naira.
+
+To be clear about what this is and is not: ElitePoints settles in Naira
+and accepts nothing else, and this change does not add foreign-currency
+support — see the USD note below, where the honest outcome is a refusal,
+not a working USD shop. What the field adds is a *unit* on a number that
+previously had none. `amount: 5000` on its own is just a figure; the
+backend had no choice but to assume it meant ₦5000, and it had no way to
+tell a Naira sale from one that was not.
+
+The exposure is not anyone deciding to sell in dollars — it is ordinary
+Odoo bookkeeping. `pos.config.currency_id` is not a setting a merchant
+picks for ElitePoints: core computes it from the shop's accounting
+journal, falling back to the journal's company and then the company
+itself (`pos_config.py:314-320`). So a non-NGN shop arises from a journal
+created in another currency, or a company whose base currency was set
+wrong at onboarding — not from an intention. If that ever happened, the
+sale synced and the customer earned points as though every unit were a
+naira, with nothing on either side recording that a conversion had been
+assumed, because from the backend's point of view nothing had: the
+request simply didn't say.
+
+Whether any merchant is in that state today is **not known** — it would
+mean auditing live merchant databases for a shop on a non-NGN journal,
+which has not been done. This closes the possibility rather than fixing
+an observed incident. The reason it is worth closing anyway is the
+other, duller half: Sage and Business Central both send this field as
+required, Odoo was the lone exception, and the backend carries a
+special-case default purely for it. Sending it is what lets that
+exception be deleted.
 
 Fixed by sending it. `_elitepoints_currency_code()` reads the order's
 `currency_id` — core's own related field onto `config_id.currency_id`,
