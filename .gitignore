@@ -5,3 +5,9 @@ __pycache__/
 *.swp
 .vscode/
 .idea/
+
+# Built module packages. Releases are built with `git archive` from a tag and
+# attached to the GitHub release, so a zip in the working tree is a local
+# leftover rather than the artifact of record — the one deleted here turned out
+# to be the v18.0.1.0.0 submission, long superseded.
+*.zip
