@@ -197,6 +197,34 @@ class PosOrder(models.Model):
         methods = self.payment_ids.mapped("payment_method_id.name")
         return ", ".join(methods) if methods else None
 
+    def _elitepoints_currency_code(self):
+        """The ISO 4217 code this order is priced in, for the `currency`
+        field every ElitePoints call now carries.
+
+        `pos.order.currency_id` is core's own related field onto
+        `config_id.currency_id`, which is where the POS session's currency
+        comes from in the first place (the shop's journal currency, falling
+        back to the company's), so reading it off the order and reading it
+        off the shop are the same answer. The shop is kept as a fallback
+        only in case that relation is ever empty.
+
+        `res.currency.name` *is* the ISO code in Odoo's own currency data
+        ('NGN', 'USD'), which is the shape the backend wants: exactly three
+        uppercase letters, per its CURRENCY_CODE_PATTERN.
+
+        Sent exactly as stored — not upper-cased, not otherwise repaired. A
+        currency record named something that is not an ISO code earns a
+        clear 400 that lands in `elitepoints_sync_error` on the order,
+        which is strictly better than dropping the field: the backend still
+        treats an absent `currency` as the settlement currency for
+        backward compatibility, so a foreign-currency sale would be scored
+        as Naira with nothing anywhere to say it happened. The whole point
+        of sending this is to stop that being possible.
+        """
+        self.ensure_one()
+        currency = self.currency_id or self.config_id.currency_id
+        return (currency.name or "").strip() or None
+
     def _sync_elitepoints(self):
         """Posts this order to ElitePoints as an earn or redeem.
 
@@ -220,6 +248,7 @@ class PosOrder(models.Model):
             external_transaction_id = order.pos_reference or f"pos-order-{order.id}"
             items = order._elitepoints_build_items()
             payment_method = order._elitepoints_payment_method_label()
+            currency = order._elitepoints_currency_code()
 
             try:
                 if order.elitepoints_redeem_amount > 0:
@@ -233,6 +262,7 @@ class PosOrder(models.Model):
                         payment_method=payment_method,
                         items=items,
                         external_transaction_id=external_transaction_id,
+                        currency=currency,
                     )
                     order.elitepoints_points_redeemed = result.get(
                         "pointsRedeemed", 0
@@ -263,6 +293,7 @@ class PosOrder(models.Model):
                         payment_method=payment_method,
                         items=items,
                         external_transaction_id=external_transaction_id,
+                        currency=currency,
                     )
                     order.elitepoints_points_earned = result.get(
                         "pointsEarned", 0
@@ -318,6 +349,12 @@ class PosOrder(models.Model):
                     refund_amount=abs(order.amount_total),
                     description=f"Refund of {original.pos_reference or original.name}",
                     external_transaction_id=external_transaction_id,
+                    # The refund order is created from the same shop as the
+                    # sale it refunds, so this is the sale's own currency —
+                    # which the backend requires, since it measures
+                    # `refundAmount` against the original transaction's
+                    # `amount` and refuses a refund in a different currency.
+                    currency=order._elitepoints_currency_code(),
                 )
                 # Signed to match how the backend records its own reversal
                 # transaction: negative because these are points leaving

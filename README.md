@@ -449,6 +449,91 @@ depends on it), then **Apps > Update Apps List** and install **ElitePoints
 Loyalty**. `docker compose -f dev/docker-compose.yml down -v` wipes it
 clean to start over.
 
+## v2.2 (18.0.2.2.0): every call now says which currency it is in
+
+The backend's integration contract carries an explicit `currency` on every
+monetary amount
+([ElitePoint-Backend `63340ec`](https://github.com/S7enTech/ElitePoint-Backend/commit/63340ec)).
+Sage and Business Central send it as a required field. This module did not
+send it at all, because the contract grew the field after this module
+shipped — so the backend's `OdooAdapter.resolveCurrency` defaults an absent
+currency to the settlement currency (NGN), as a deliberate
+backward-compatibility concession to exactly the version of this module
+that merchants are running today.
+
+That default was the last remaining path on the whole platform where a
+foreign-currency sale is scored as if it were Naira. A shop whose POS
+session runs in USD earned a customer points as though every dollar were a
+naira — roughly 1,500x the points the sale was worth — and nothing on
+either side recorded that a conversion had been assumed, because from the
+backend's point of view nothing had: the request simply didn't say.
+
+Fixed by sending it. `_elitepoints_currency_code()` reads the order's
+`currency_id` — core's own related field onto `config_id.currency_id`,
+which is where the POS session's currency comes from (the shop's journal
+currency, falling back to the company's) — and sends
+`res.currency.name`, which *is* the ISO 4217 code in Odoo's own currency
+data. All three calls carry it: earn, redeem, and reverse.
+
+The code is sent exactly as stored, not upper-cased or otherwise repaired.
+The backend validates the shape with `CURRENCY_CODE_PATTERN` (three
+uppercase letters) and rejects anything else, and a rejection is the right
+outcome: it lands on the order in `elitepoints_sync_error` where someone
+can see it. Quietly dropping a malformed code would instead hand the sale
+straight back to the NGN default this change exists to stop using.
+
+### No migration, and why the retry queue does not need one
+
+Worth stating explicitly, because the shape of this module invites the
+opposite assumption: **nothing stores an API payload**, so there is no
+stored payload anywhere that needs `currency` added to it on replay.
+
+Two things look like queues here and neither is one:
+
+* `elitepoints.pending.sync` stages three *order* fields
+  (`customer_ref`, `identifier`, `redeem_amount`) that cannot travel
+  through the normal POS field sync (see that model's docstring). It is
+  not a request queue, it holds no amounts-as-sent, and rows live for
+  minutes.
+* The failed-sync retry (`_elitepoints_retry_failed_syncs`) queues
+  *orders*, by `elitepoints_sync_status = 'failed'`, and
+  `_sync_elitepoints` rebuilds the request from the order from scratch on
+  every attempt.
+
+So an order that failed to sync under v2.1 and is still being retried
+picks `currency` up automatically on its next cron run after the upgrade,
+with no backfill and nothing to migrate. The version bump is
+`18.0.2.1.0` → `18.0.2.2.0` and ships no `migrations/` directory.
+
+### The backend change this unblocks — not yet
+
+Once this module is released **and merchants have actually upgraded**, the
+backend should:
+
+* drop the `resolveCurrency` default in
+  `src/integrations/adapters/odoo/odoo.adapter.ts`, and
+* make `currency` required on the three Odoo DTOs
+  (`odoo-earn-point.dto.ts`, `odoo-redeem-point.dto.ts`,
+  `odoo-reverse-transaction.dto.ts`), matching Sage and Business Central.
+
+Deliberately **not** done alongside this change. A till still running
+v2.1 or earlier sends no `currency`, and making the field required would
+turn every one of its sales into a 400 — a checkout-blocking outage at
+exactly the merchants who have not upgraded yet. The concession has to
+outlive the fix for as long as the old module is in the field.
+
+One edge case to expect while both versions are live, and the reason the
+clean-up is worth doing rather than leaving the default forever: a
+foreign-currency sale recorded by the old module landed in the backend
+with no currency, i.e. as NGN. Refund it from an upgraded till and the
+reversal correctly says `USD`, which the backend refuses as a mismatch
+against the sale it reverses — `describeCurrencyMismatch` guards this
+because `refundAmount` is measured as a proportion of the original
+`amount`. That refund fails and stays failed. It is the right refusal
+(the alternative is clawing back a 1,500th of the points), but it has to
+be fixed in the data, not worked around here by sending a currency the
+sale was not actually in.
+
 ## What's deliberately out of scope here
 
 - Odoo 17 support — only 18 was targeted per the initial ask. The module

@@ -1,6 +1,6 @@
 {
     'name': 'ElitePoints Loyalty',
-    'version': '18.0.2.1.0',
+    'version': '18.0.2.2.0',
     'category': 'Point of Sale',
     'summary': 'Reward and redeem ElitePoints loyalty points from Odoo Point of Sale',
     'description': """
