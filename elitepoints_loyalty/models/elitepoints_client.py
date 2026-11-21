@@ -257,6 +257,7 @@ class ElitePointsClient(models.AbstractModel):
         payment_method=None,
         items=None,
         external_transaction_id=None,
+        currency=None,
     ):
         body = {
             "customerId": customer_ref,
@@ -265,6 +266,8 @@ class ElitePointsClient(models.AbstractModel):
             "transactionDate": transaction_date,
             "items": items or [],
         }
+        if currency:
+            body["currency"] = currency
         if payment_method:
             body["paymentMethod"] = payment_method
         if external_transaction_id:
@@ -284,6 +287,7 @@ class ElitePointsClient(models.AbstractModel):
         payment_method=None,
         items=None,
         external_transaction_id=None,
+        currency=None,
     ):
         body = {
             "customerId": customer_ref,
@@ -292,6 +296,8 @@ class ElitePointsClient(models.AbstractModel):
             "description": description,
             "items": items or [],
         }
+        if currency:
+            body["currency"] = currency
         if payment_method:
             body["paymentMethod"] = payment_method
         if external_transaction_id:
@@ -308,12 +314,15 @@ class ElitePointsClient(models.AbstractModel):
         refund_amount,
         description,
         external_transaction_id=None,
+        currency=None,
     ):
         body = {
             "originalExternalTransactionId": original_external_transaction_id,
             "refundAmount": refund_amount,
             "description": description,
         }
+        if currency:
+            body["currency"] = currency
         if external_transaction_id:
             body["externalTransactionId"] = external_transaction_id
         result = self._authed_request(
